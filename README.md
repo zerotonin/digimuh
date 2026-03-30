@@ -132,6 +132,9 @@ creates analysis views on first run, queries the database, and writes results
 # Install with analysis dependencies
 pip install -e ".[analysis]"
 
+# 0. Individual heat stress thresholds (broken-stick regression)
+digimuh-broken-stick --db cow.db --tierauswahl Tierauswahl.xlsx --out results/broken_stick
+
 # 1. Subclinical ketosis risk — FPR × rumination × milk yield
 digimuh-ketosis --db cow.db --out results/ketosis
 
@@ -161,6 +164,7 @@ definitions that power these analyses.
 
 - [x] CSV → SQLite ingestion with star schema
 - [x] SQL views for analysis (daily summaries + cross-table joins)
+- [x] Analysis: individual heat stress thresholds (broken-stick regression)
 - [x] Analysis: subclinical ketosis detection (FPR + RF classifier)
 - [x] Analysis: heat stress multi-sensor fusion
 - [x] Analysis: digestive efficiency (motility–pH coupling)
