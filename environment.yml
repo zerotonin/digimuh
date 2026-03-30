@@ -1,0 +1,13 @@
+name: digimuh
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python>=3.10
+  - pip
+  - tqdm
+  - pytest
+  - sphinx
+  - sphinx_rtd_theme
+  - pip:
+    - -e .

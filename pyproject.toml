@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools >= 68.0", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "digimuh"
+version = "0.1.0"
+description = "DigiMuh — dairy cow sensor data ingestion and analysis toolkit"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Bart R. H. Geurten", email = "bart.geurten@otago.ac.nz"},
+]
+keywords = [
+    "dairy", "cattle", "sensor", "sqlite", "precision-livestock",
+    "animal-science", "smaxtec", "herdeplus",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest >= 7.0",
+    "sphinx >= 7.0",
+    "sphinx-rtd-theme",
+    "tqdm",
+]
+progress = [
+    "tqdm",
+]
+
+[project.scripts]
+digimuh-ingest = "digimuh.ingest_cow_db:main"
+
+[project.urls]
+Repository = "https://github.com/zerotonin/digimuh"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
