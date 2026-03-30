@@ -122,12 +122,52 @@ python -m pytest
 ```
 
 
+## Analysis pipeline
+
+After ingestion, five analysis scripts are available as CLI commands.  Each
+creates analysis views on first run, queries the database, and writes results
+(CSV data + figures) to an output directory.
+
+```bash
+# Install with analysis dependencies
+pip install -e ".[analysis]"
+
+# 1. Subclinical ketosis risk — FPR × rumination × milk yield
+digimuh-ketosis --db cow.db --out results/ketosis
+
+# 2. Heat stress — rumen temp × THI × water × respiration
+digimuh-heat --db cow.db --out results/heat
+
+# 3. Digestive efficiency — motility × pH → milk composition (time-lagged)
+digimuh-digestive --db cow.db --out results/digestive
+
+# 4. Circadian disruption — 24h Fourier decomposition as welfare marker
+digimuh-circadian --db cow.db --out results/circadian
+
+# 5. Motility entropy — rumen HRV analogue via information theory
+digimuh-entropy --db cow.db --out results/entropy
+```
+
+Each script writes:
+- A CSV of the extracted features (for further analysis in R, Python, etc.)
+- Publication-ready SVG + PNG figures
+- A JSON summary of key results (where applicable)
+
+See [`docs/database_structure.md`](docs/database_structure.md) for the SQL view
+definitions that power these analyses.
+
+
 ## Roadmap
 
 - [x] CSV → SQLite ingestion with star schema
-- [ ] SQL views for common joins (e.g. milking + weather + health)
+- [x] SQL views for analysis (daily summaries + cross-table joins)
+- [x] Analysis: subclinical ketosis detection (FPR + RF classifier)
+- [x] Analysis: heat stress multi-sensor fusion
+- [x] Analysis: digestive efficiency (motility–pH coupling)
+- [x] Analysis: circadian rhythm disruption index
+- [x] Analysis: motility pattern entropy (novel)
 - [ ] Data validation and quality-check reports
-- [ ] Analysis modules (heat stress, health prediction)
+- [ ] Parallelised entropy computation for full dataset
 - [ ] Sphinx documentation on GitHub Pages
 
 
