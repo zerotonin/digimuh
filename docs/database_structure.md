@@ -353,6 +353,66 @@ pattern: "give me all measurements for entity X between dates A and B".
 
 ## Planned additions
 
-- **Views** joining fact tables with weather data for heat-stress analysis
-- **Lactation view** combining herdeplus milking + BCS + disease windows
-- **Materialised summary tables** for daily/weekly aggregates
+- **Lactation view** combining herdeplus milking + BCS + disease windows per lactation cycle
+- **Materialised summary tables** for daily/weekly aggregates (if view performance is insufficient)
+
+
+## Analysis views
+
+The file `src/digimuh/create_views.sql` defines a three-layer view hierarchy.
+Views are created automatically when any analysis script connects to the database.
+
+### Layer 0 — hourly aggregates
+
+| View | Purpose | Grouped by |
+|---|---|---|
+| `v_smaxtec_hourly` | Hourly means of temp, activity, rumination, motility, pH | animal × day × hour |
+
+### Layer 1 — daily summaries
+
+These views aggregate each data source into one row per animal (or sensor/barn) per day.
+
+| View | Source table(s) | Key columns |
+|---|---|---|
+| `v_smaxtec_daily` | smaxtec_derived | temp (mean/min/max/range), activity, rumination, motility, pH, drinking, estrus/calving indices |
+| `v_herdeplus_daily` | herdeplus | total milk yield, mean duration/flow, MLP test-day values (fat, protein, FPR, SCC, urea, lactose, ECM) |
+| `v_gouna_daily` | gouna | mean/min/max respiration frequency |
+| `v_water_daily` | smaxtec_water_intake | total water intake (litres) |
+| `v_bcs_latest` | bcs | BCS value and assessment date |
+| `v_barn_daily` | smaxtec_barns | barn temp/humidity/THI (mean and max) |
+
+### Layer 2 — analysis-specific joins
+
+Each analysis view joins the daily summaries needed for a specific research question.
+
+| View | Joins | Purpose |
+|---|---|---|
+| `v_analysis_ketosis` | herdeplus + smaxtec + water + diseases | FPR, rumination, milk yield, rumen pH, with disease ground truth.  Includes a `fpr_flag` column (+1 = energy deficit, −1 = acidosis, 0 = normal) and `is_sick` binary from disease records. |
+| `v_analysis_heat_stress` | smaxtec + water + gouna + herdeplus + DWD weather | Rumen temp, respiration, activity, water intake, milk yield, all aligned with ambient THI and enthalpy. |
+| `v_analysis_digestive` | smaxtec + herdeplus + water | Motility/pH daily profiles alongside MLP test-day composition for time-lagged cross-correlation analysis. |
+| `v_analysis_circadian` | smaxtec_hourly + diseases | Hourly temp/activity/rumination profiles per animal-day with disease status for circadian rhythm analysis. |
+| `v_analysis_motility` | smaxtec_derived (minimal aggregation) | Raw motility series (contraction intervals, pulse widths) with concurrent pH, rumination, and temperature for entropy computation. |
+
+### Example queries using views
+
+```sql
+-- Daily milk yield vs. heat load for a specific cow
+SELECT day, milk_yield_kg, rumen_temp_mean, dwd_thi_max, water_liter
+FROM v_analysis_heat_stress
+WHERE animal_id = 276001260919234
+ORDER BY day;
+
+-- MLP test days with FPR above ketosis threshold
+SELECT animal_id, day, mlp_fpr, rum_index_mean, milk_yield_kg, disease_category
+FROM v_analysis_ketosis
+WHERE fpr_flag = 1
+ORDER BY day;
+
+-- Hourly temperature profile for circadian analysis
+SELECT hour, AVG(temp_clean_mean) AS temp, AVG(act_index_mean) AS activity
+FROM v_analysis_circadian
+WHERE animal_id = 276001260919234
+  AND day = '2023-07-15'
+GROUP BY hour
+ORDER BY hour;
+```
