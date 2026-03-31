@@ -289,8 +289,15 @@ WHERE "timestamp" >= ?
   AND "timestamp" <= ?
   AND temp IS NOT NULL
   AND temp_hum_index IS NOT NULL
+  AND barn_id IN (1, 2)
 GROUP BY "timestamp"
 """
+
+# Neubau barn sensor IDs — groups 1005 and 1006 are housed here.
+# barn_id 1 = "NewBridge", barn_id 2 = "NewPillar".
+# barn_id 3 ("OldBridge") and 4 ("OldRepro") are excluded because
+# the Tierauswahl animals are not in those buildings.
+NEUBAU_BARN_IDS = (1, 2)
 
 DRINK_PAD = pd.Timedelta(minutes=15)
 
@@ -765,6 +772,7 @@ SELECT
 FROM smaxtec_barns
 WHERE "timestamp" >= ? AND "timestamp" <= ?
   AND temp IS NOT NULL AND temp_hum_index IS NOT NULL
+  AND barn_id IN (1, 2)
 GROUP BY date("timestamp")
 ORDER BY day
 """
