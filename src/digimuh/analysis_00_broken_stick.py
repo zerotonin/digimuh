@@ -872,6 +872,282 @@ def plot_example_animal(
         save_fig(fig, f"broken_stick_example_{name}_{animal_id}_{year}", out_dir)
 
 
+def plot_example_respiration(
+    con, animal_id: int, date_enter: str, date_exit: str,
+    thi_fit: dict, temp_fit: dict, out_dir: Path, year: int,
+) -> None:
+    """Plot the broken-stick fit for respiration of one example animal.
+
+    Args:
+        con: Database connection.
+        animal_id: EU ear tag.
+        date_enter, date_exit: Observation window.
+        thi_fit, temp_fit: Fit result dicts for resp vs THI / barn temp.
+        out_dir: Output directory.
+        year: Observation year.
+    """
+    import matplotlib.pyplot as plt
+    setup_plotting()
+
+    df = load_respiration_data(con, animal_id, date_enter, date_exit)
+    if df.empty:
+        return
+
+    for x_col, fit, xlabel, name in [
+        ("barn_thi", thi_fit, "Barn THI", "resp_thi"),
+        ("barn_temp", temp_fit, "Barn temperature (°C)", "resp_temp"),
+    ]:
+        if not fit.get("converged", False):
+            continue
+
+        bp = fit["breakpoint"]
+        fig, ax = plt.subplots(figsize=(9, 6))
+        ax.scatter(df[x_col], df["resp_rate"], s=3, alpha=0.2, c=COLOURS["identity"])
+
+        x_range = np.linspace(df[x_col].min(), df[x_col].max(), 200)
+        y_pred = np.where(
+            x_range <= bp,
+            fit["intercept_below"] + fit["slope_below"] * x_range,
+            fit["intercept_above"] + fit["slope_above"] * x_range,
+        )
+        ax.plot(x_range, y_pred, color=COLOURS["fit_line"], linewidth=2,
+                label="Broken-stick fit")
+        ax.axvline(bp, color=COLOURS["below_bp"], linestyle="--", linewidth=1.5,
+                   label=f"Breakpoint = {bp:.1f}")
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("Respiration rate (breaths/min)")
+        ax.set_title(
+            f"Animal {animal_id} ({year}) — respiration breakpoint at {xlabel} = {bp:.1f}\n"
+            f"R² = {fit['r_squared']:.3f}, n = {fit['n']:,}",
+        )
+        ax.legend()
+        save_fig(fig, f"broken_stick_example_{name}_{animal_id}_{year}", out_dir)
+
+
+def plot_grouped_breakpoint_boxplot(results: pd.DataFrame, out_dir: Path) -> None:
+    """Side-by-side boxplots of rumen temp and respiration breakpoints per year.
+
+    Args:
+        results: Full results DataFrame.
+        out_dir: Output directory.
+    """
+    import matplotlib.pyplot as plt
+    setup_plotting()
+
+    years = sorted(results["year"].dropna().unique().astype(int))
+
+    # ── THI breakpoints: rumen temp vs respiration ───────────
+    thi_conv = results[results["thi_converged"] == True]
+    resp_conv = results[results["resp_thi_converged"] == True]
+
+    if thi_conv.empty:
+        return
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    width = 0.35
+    x_positions = np.arange(len(years))
+
+    # Rumen temp breakpoints
+    data_rumen = [
+        thi_conv[thi_conv["year"] == y]["thi_breakpoint"].dropna().values
+        for y in years
+    ]
+    bp1 = ax.boxplot(
+        data_rumen, positions=x_positions - width / 2, widths=width,
+        patch_artist=True,
+        boxprops=dict(facecolor=COLOURS["below_bp"], alpha=0.6, edgecolor="#333"),
+        medianprops=dict(color="#333", linewidth=2),
+        manage_ticks=False,
+    )
+
+    # Respiration breakpoints
+    data_resp = [
+        resp_conv[resp_conv["year"] == y]["resp_thi_breakpoint"].dropna().values
+        for y in years
+    ]
+    # Only plot if we have data
+    has_resp = any(len(d) > 0 for d in data_resp)
+    if has_resp:
+        bp2 = ax.boxplot(
+            data_resp, positions=x_positions + width / 2, widths=width,
+            patch_artist=True,
+            boxprops=dict(facecolor=COLOURS["above_bp"], alpha=0.6, edgecolor="#333"),
+            medianprops=dict(color="#333", linewidth=2),
+            manage_ticks=False,
+        )
+
+    ax.axhline(68.8, color=COLOURS["reference"], linestyle="--", linewidth=1,
+               label="THI 68.8 (mild stress onset)")
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels([str(y) for y in years])
+    ax.set_xlabel("Year")
+    ax.set_ylabel("Individual THI breakpoint")
+    ax.set_title("Per-animal THI breakpoints: rumen temperature vs. respiration rate")
+
+    # Custom legend
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor=COLOURS["below_bp"], alpha=0.6, label="Rumen temperature"),
+        Patch(facecolor=COLOURS["above_bp"], alpha=0.6, label="Respiration rate"),
+    ]
+    ax.legend(handles=legend_elements, fontsize=10)
+
+    # Annotate n per group
+    for i, y in enumerate(years):
+        n_r = len(data_rumen[i])
+        n_resp = len(data_resp[i]) if has_resp else 0
+        ymin = ax.get_ylim()[0]
+        ax.text(i - width / 2, ymin + 0.5, f"n={n_r}",
+                ha="center", fontsize=8, color="#555555")
+        if n_resp > 0:
+            ax.text(i + width / 2, ymin + 0.5, f"n={n_resp}",
+                    ha="center", fontsize=8, color="#555555")
+
+    save_fig(fig, "broken_stick_grouped_thi_boxplot", out_dir)
+
+    # ── Same for barn temperature breakpoints ────────────────
+    temp_conv = results[results["temp_converged"] == True]
+    resp_temp_conv = results[results["resp_temp_converged"] == True]
+
+    if temp_conv.empty:
+        return
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    data_rumen_t = [
+        temp_conv[temp_conv["year"] == y]["temp_breakpoint"].dropna().values
+        for y in years
+    ]
+    bp1 = ax.boxplot(
+        data_rumen_t, positions=x_positions - width / 2, widths=width,
+        patch_artist=True,
+        boxprops=dict(facecolor=COLOURS["below_bp"], alpha=0.6, edgecolor="#333"),
+        medianprops=dict(color="#333", linewidth=2),
+        manage_ticks=False,
+    )
+
+    data_resp_t = [
+        resp_temp_conv[resp_temp_conv["year"] == y]["resp_temp_breakpoint"].dropna().values
+        for y in years
+    ]
+    has_resp_t = any(len(d) > 0 for d in data_resp_t)
+    if has_resp_t:
+        bp2 = ax.boxplot(
+            data_resp_t, positions=x_positions + width / 2, widths=width,
+            patch_artist=True,
+            boxprops=dict(facecolor=COLOURS["above_bp"], alpha=0.6, edgecolor="#333"),
+            medianprops=dict(color="#333", linewidth=2),
+            manage_ticks=False,
+        )
+
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels([str(y) for y in years])
+    ax.set_xlabel("Year")
+    ax.set_ylabel("Individual barn temperature breakpoint (°C)")
+    ax.set_title("Per-animal barn temp breakpoints: rumen temperature vs. respiration rate")
+
+    legend_elements = [
+        Patch(facecolor=COLOURS["below_bp"], alpha=0.6, label="Rumen temperature"),
+        Patch(facecolor=COLOURS["above_bp"], alpha=0.6, label="Respiration rate"),
+    ]
+    ax.legend(handles=legend_elements, fontsize=10)
+    save_fig(fig, "broken_stick_grouped_temp_boxplot", out_dir)
+
+
+def plot_paired_rumen_vs_resp(results: pd.DataFrame, out_dir: Path) -> None:
+    """Paired boxplots with connecting lines: rumen temp vs respiration breakpoints.
+
+    For animals with both converged rumen temp and respiration breakpoints,
+    shows a paired comparison with individual lines connecting each animal's
+    two breakpoints.
+
+    Args:
+        results: Full results DataFrame.
+        out_dir: Output directory.
+    """
+    import matplotlib.pyplot as plt
+    from scipy.stats import wilcoxon
+    setup_plotting()
+
+    # Animals with both THI breakpoints
+    both = results[
+        (results["thi_converged"] == True) & (results["resp_thi_converged"] == True)
+    ].copy()
+
+    if len(both) < 5:
+        log.info("Only %d animals with both rumen + resp THI breakpoints — skipping paired plot", len(both))
+        return
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+
+    for ax, rumen_col, resp_col, ylabel, title in [
+        (axes[0], "thi_breakpoint", "resp_thi_breakpoint",
+         "THI breakpoint", "THI breakpoints"),
+        (axes[1], "temp_breakpoint", "resp_temp_breakpoint",
+         "Barn temperature breakpoint (°C)", "Barn temp breakpoints"),
+    ]:
+        # Filter to animals with both converged
+        if "temp" in rumen_col:
+            sub = results[
+                (results["temp_converged"] == True) &
+                (results["resp_temp_converged"] == True)
+            ].dropna(subset=[rumen_col, resp_col])
+        else:
+            sub = both.dropna(subset=[rumen_col, resp_col])
+
+        if len(sub) < 5:
+            ax.text(0.5, 0.5, f"Insufficient paired data\n(n={len(sub)})",
+                    transform=ax.transAxes, ha="center", va="center",
+                    fontsize=11, color=COLOURS["identity"])
+            ax.set_title(title)
+            continue
+
+        rumen_vals = sub[rumen_col].values
+        resp_vals = sub[resp_col].values
+
+        bp_plot = ax.boxplot(
+            [rumen_vals, resp_vals],
+            positions=[0, 1],
+            labels=["Rumen\ntemperature", "Respiration\nrate"],
+            patch_artist=True, widths=0.5,
+        )
+        bp_plot["boxes"][0].set_facecolor(COLOURS["below_bp"])
+        bp_plot["boxes"][0].set_alpha(0.5)
+        bp_plot["boxes"][1].set_facecolor(COLOURS["above_bp"])
+        bp_plot["boxes"][1].set_alpha(0.5)
+        for median in bp_plot["medians"]:
+            median.set_color("#333333")
+            median.set_linewidth(2)
+
+        # Paired lines
+        for r, resp in zip(rumen_vals, resp_vals):
+            ax.plot([0, 1], [r, resp], "-", color=COLOURS["paired_line"],
+                    alpha=0.3, linewidth=0.7)
+
+        # Wilcoxon signed-rank test
+        try:
+            stat, p = wilcoxon(rumen_vals, resp_vals)
+            diff = np.median(resp_vals - rumen_vals)
+            ax.text(0.5, 0.02,
+                    f"Wilcoxon p = {p:.4f}, n = {len(sub)}\n"
+                    f"Median Δ (resp − rumen) = {diff:+.1f}",
+                    transform=ax.transAxes, ha="center", fontsize=9,
+                    color="#555555")
+        except Exception:
+            pass
+
+        ax.set_ylabel(ylabel)
+        ax.set_title(title, fontsize=11)
+
+    fig.suptitle(
+        "Paired comparison: rumen temperature vs. respiration rate breakpoints\n"
+        "(same animals, individual lines connect paired observations)",
+        fontsize=12,
+    )
+    fig.tight_layout()
+    save_fig(fig, "broken_stick_paired_rumen_vs_resp", out_dir)
+
+
 # ─────────────────────────────────────────────────────────────
 #  « Spearman correlations (manuscript requirement) »
 # ─────────────────────────────────────────────────────────────
@@ -1687,8 +1963,10 @@ def main() -> None:
     log.info("7. Generating summary table and breakpoint plots …")
     generate_summary_table(results, args.out)
     plot_breakpoint_boxplots(results, args.out)
+    plot_grouped_breakpoint_boxplot(results, args.out)
+    plot_paired_rumen_vs_resp(results, args.out)
 
-    # Example animal plot (best THI fit)
+    # Example animal plots — best THI fit for rumen temp
     if not converged_thi.empty:
         best = converged_thi.loc[converged_thi["thi_r_squared"].idxmax()]
         df_ex = load_animal_data(
@@ -1709,6 +1987,32 @@ def main() -> None:
                 best["date_enter"], best["date_exit"],
                 thi_refit, temp_refit, args.out,
                 int(best["year"]),
+            )
+
+    # Example animal plots — best resp-THI fit
+    converged_resp_thi = results[results["resp_thi_converged"] == True]
+    if not converged_resp_thi.empty:
+        best_resp = converged_resp_thi.loc[
+            converged_resp_thi["resp_thi_r_squared"].idxmax()
+        ]
+        resp_df = load_respiration_data(
+            con, int(best_resp["animal_id"]),
+            best_resp["date_enter"], best_resp["date_exit"],
+        )
+        if not resp_df.empty:
+            resp_thi_refit = broken_stick_fit(
+                resp_df["barn_thi"].values, resp_df["resp_rate"].values,
+                x_range=(45, 80),
+            )
+            resp_temp_refit = broken_stick_fit(
+                resp_df["barn_temp"].values, resp_df["resp_rate"].values,
+                x_range=(5, 35),
+            )
+            plot_example_respiration(
+                con, int(best_resp["animal_id"]),
+                best_resp["date_enter"], best_resp["date_exit"],
+                resp_thi_refit, resp_temp_refit, args.out,
+                int(best_resp["year"]),
             )
 
     con.close()
