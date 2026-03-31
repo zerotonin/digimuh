@@ -180,8 +180,18 @@ def _get_barn(con, date_enter, date_exit, barn_cache):
 #  « extraction routines »
 # ─────────────────────────────────────────────────────────────
 
-def extract_rumen_barn(con, tierauswahl: pd.DataFrame) -> pd.DataFrame:
-    """Extract rumen temp + barn climate for all selected animals."""
+def extract_rumen_barn(
+    con, tierauswahl: pd.DataFrame, exclude_drinking: bool = True,
+) -> pd.DataFrame:
+    """Extract rumen temp + barn climate for all selected animals.
+
+    Args:
+        con: Database connection.
+        tierauswahl: Animal selection DataFrame.
+        exclude_drinking: If True, exclude drinking events + 15 min
+            padding.  If False, rely solely on smaXtec's built-in
+            ``temp_without_drink_cycles`` correction.
+    """
     barn_cache: dict = {}
     frames = []
     total = len(tierauswahl)
@@ -199,7 +209,10 @@ def extract_rumen_barn(con, tierauswahl: pd.DataFrame) -> pd.DataFrame:
         if rumen.empty:
             continue
         rumen["timestamp"] = pd.to_datetime(rumen["timestamp"])
-        rumen = _exclude_drinking_windows(rumen)
+        if exclude_drinking:
+            rumen = _exclude_drinking_windows(rumen)
+        elif "drink_cycles" in rumen.columns:
+            rumen = rumen.drop(columns=["drink_cycles"])
         if rumen.empty:
             continue
         rumen["hour_key"] = rumen["timestamp"].dt.floor("h")
@@ -309,6 +322,13 @@ def main() -> None:
     parser.add_argument("--db", type=Path, required=True)
     parser.add_argument("--tierauswahl", type=Path, required=True)
     parser.add_argument("--out", type=Path, default=Path("results/broken_stick"))
+    parser.add_argument(
+        "--no-drink-exclusion", action="store_true",
+        help="Skip the 15-min post-drinking exclusion window.  "
+             "Relies solely on smaXtec's temp_without_drink_cycles "
+             "correction.  Use this to test whether the extra exclusion "
+             "affects convergence rates.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -318,6 +338,10 @@ def main() -> None:
     )
     args.out.mkdir(parents=True, exist_ok=True)
 
+    exclude_drinking = not args.no_drink_exclusion
+    log.info("Drinking exclusion: %s",
+             "ON (15-min padding)" if exclude_drinking else "OFF (smaXtec correction only)")
+
     con = connect_db(args.db)
     ta = load_tierauswahl(args.tierauswahl)
     ta.to_csv(args.out / "tierauswahl.csv", index=False)
@@ -325,7 +349,7 @@ def main() -> None:
              len(ta), sorted(ta["year"].dropna().unique().astype(int)))
 
     log.info("Extracting rumen + barn data …")
-    rumen = extract_rumen_barn(con, ta)
+    rumen = extract_rumen_barn(con, ta, exclude_drinking=exclude_drinking)
     rumen.to_csv(args.out / "rumen_barn.csv", index=False)
     log.info("  → %d rows, %d animals", len(rumen), rumen["animal_id"].nunique())
 
