@@ -421,8 +421,79 @@ def load_animal_data(
 
 
 # ─────────────────────────────────────────────────────────────
-#  « main analysis loop »
+#  « respiration data loading »
 # ─────────────────────────────────────────────────────────────
+
+SQL_RESPIRATION = """
+SELECT
+    animal_id,
+    "timestamp",
+    respirationfrequency AS resp_rate
+FROM gouna
+WHERE animal_id = ?
+  AND "timestamp" >= ?
+  AND "timestamp" <= ?
+  AND respirationfrequency IS NOT NULL
+  AND respirationfrequency > 5
+  AND respirationfrequency < 150
+"""
+
+
+def load_respiration_data(
+    con, animal_id: int, date_enter: str, date_exit: str,
+    barn_cache: dict | None = None,
+) -> pd.DataFrame:
+    """Load respiration + barn climate for one animal.
+
+    Queries gouna respiration and smaxtec_barns (Neubau only),
+    joins by hour, excludes milking hours.
+
+    Args:
+        con: Database connection.
+        animal_id: EU ear tag integer.
+        date_enter: Start of observation window (ISO date).
+        date_exit: End of observation window (ISO date).
+        barn_cache: Shared barn data cache.
+
+    Returns:
+        DataFrame with resp_rate, barn_temp, barn_thi columns,
+        milking periods excluded.  Empty if no gouna data exists.
+    """
+    resp = query_df(con, SQL_RESPIRATION, (animal_id, date_enter, date_exit))
+    if resp.empty:
+        return resp
+
+    resp["timestamp"] = pd.to_datetime(resp["timestamp"])
+    resp["hour_key"] = resp["timestamp"].dt.floor("h")
+
+    # Barn climate (reuse cache)
+    cache_key = (date_enter, date_exit)
+    if barn_cache is not None and cache_key in barn_cache:
+        barn = barn_cache[cache_key]
+    else:
+        barn = query_df(con, SQL_BARN, (date_enter, date_exit))
+        if not barn.empty:
+            barn["timestamp"] = pd.to_datetime(barn["timestamp"])
+            barn["hour_key"] = barn["timestamp"].dt.floor("h")
+            barn = barn.groupby("hour_key").agg(
+                barn_temp=("barn_temp", "mean"),
+                barn_thi=("barn_thi", "mean"),
+            ).reset_index()
+        if barn_cache is not None:
+            barn_cache[cache_key] = barn
+
+    if barn.empty:
+        return pd.DataFrame()
+
+    df = resp.merge(barn, on="hour_key", how="inner")
+    if df.empty:
+        return df
+
+    # Exclude milking hours
+    hour = df["timestamp"].dt.hour
+    df = df[~hour.between(4, 7) & ~hour.between(16, 19)]
+
+    return df
 
 def run_broken_stick_analysis(
     con, tierauswahl: pd.DataFrame,
@@ -478,14 +549,34 @@ def run_broken_stick_analysis(
             x_range=(5, 35),
         )
 
+        # ── Fit 3 & 4: respiration vs THI and barn temp ─────
+        resp_df = load_respiration_data(con, aid, enter, exit_, barn_cache=barn_cache)
+        has_resp = len(resp_df) >= 50
+
+        if has_resp:
+            resp_thi_fit = broken_stick_fit(
+                resp_df["barn_thi"].values,
+                resp_df["resp_rate"].values,
+                x_range=(45, 80),
+            )
+            resp_temp_fit = broken_stick_fit(
+                resp_df["barn_temp"].values,
+                resp_df["resp_rate"].values,
+                x_range=(5, 35),
+            )
+        else:
+            resp_thi_fit = {"breakpoint": np.nan, "converged": False, "n": len(resp_df)}
+            resp_temp_fit = {"breakpoint": np.nan, "converged": False, "n": len(resp_df)}
+
         result = {
             "animal_id": aid,
             "year": year,
             "group": row.get("group"),
             "n_readings": len(df),
+            "n_resp_readings": len(resp_df) if has_resp else 0,
             "date_enter": enter,
             "date_exit": exit_,
-            # THI breakpoint
+            # THI breakpoint (body temp)
             "thi_breakpoint": thi_fit.get("breakpoint"),
             "thi_slope_below": thi_fit.get("slope_below"),
             "thi_slope_above": thi_fit.get("slope_above"),
@@ -493,7 +584,7 @@ def run_broken_stick_analysis(
             "thi_converged": thi_fit.get("converged", False),
             "thi_n_below": thi_fit.get("n_below"),
             "thi_n_above": thi_fit.get("n_above"),
-            # Barn temp breakpoint
+            # Barn temp breakpoint (body temp)
             "temp_breakpoint": temp_fit.get("breakpoint"),
             "temp_slope_below": temp_fit.get("slope_below"),
             "temp_slope_above": temp_fit.get("slope_above"),
@@ -501,6 +592,18 @@ def run_broken_stick_analysis(
             "temp_converged": temp_fit.get("converged", False),
             "temp_n_below": temp_fit.get("n_below"),
             "temp_n_above": temp_fit.get("n_above"),
+            # Respiration vs THI breakpoint
+            "resp_thi_breakpoint": resp_thi_fit.get("breakpoint"),
+            "resp_thi_slope_below": resp_thi_fit.get("slope_below"),
+            "resp_thi_slope_above": resp_thi_fit.get("slope_above"),
+            "resp_thi_r_squared": resp_thi_fit.get("r_squared"),
+            "resp_thi_converged": resp_thi_fit.get("converged", False),
+            # Respiration vs barn temp breakpoint
+            "resp_temp_breakpoint": resp_temp_fit.get("breakpoint"),
+            "resp_temp_slope_below": resp_temp_fit.get("slope_below"),
+            "resp_temp_slope_above": resp_temp_fit.get("slope_above"),
+            "resp_temp_r_squared": resp_temp_fit.get("r_squared"),
+            "resp_temp_converged": resp_temp_fit.get("converged", False),
             "comment": "",
         }
 
@@ -511,6 +614,13 @@ def run_broken_stick_analysis(
             reason = temp_fit.get("rejected_reason", "no breakpoint found")
             prefix = "; " if result["comment"] else ""
             result["comment"] += f"{prefix}Temp: {reason}"
+        if has_resp and not resp_thi_fit.get("converged", False):
+            reason = resp_thi_fit.get("rejected_reason", "no breakpoint found")
+            prefix = "; " if result["comment"] else ""
+            result["comment"] += f"{prefix}Resp-THI: {reason}"
+        if not has_resp:
+            prefix = "; " if result["comment"] else ""
+            result["comment"] += f"{prefix}No gouna data"
 
         results.append(result)
 
@@ -610,6 +720,95 @@ def plot_breakpoint_boxplots(results: pd.DataFrame, out_dir: Path) -> None:
         ax.set_title("Individual heat stress thresholds: THI vs. barn temperature")
         ax.legend()
         save_fig(fig, "broken_stick_thi_vs_temp", out_dir)
+
+    # ── Respiration vs THI breakpoint boxplot ────────────────
+    resp_thi_conv = results[results["resp_thi_converged"] == True]
+    if not resp_thi_conv.empty:
+        fig, ax = plt.subplots(figsize=(8, 5))
+        data_resp_thi = [
+            resp_thi_conv[resp_thi_conv["year"] == y]["resp_thi_breakpoint"].dropna().values
+            for y in years
+        ]
+        # Only plot years that have data
+        valid_years = [y for y, d in zip(years, data_resp_thi) if len(d) > 0]
+        valid_data = [d for d in data_resp_thi if len(d) > 0]
+        if valid_data:
+            bp = ax.boxplot(
+                valid_data, labels=[str(y) for y in valid_years],
+                patch_artist=True,
+                boxprops=dict(facecolor=COLOURS["box_thi"], edgecolor="#333333"),
+                medianprops=dict(color=COLOURS["median"], linewidth=2),
+            )
+            ax.axhline(68.8, color=COLOURS["reference"], linestyle="--", linewidth=1,
+                       label="THI 68.8 (mild stress onset)")
+            ax.set_xlabel("Year")
+            ax.set_ylabel("Individual THI breakpoint (respiration)")
+            ax.set_title(
+                "Per-animal respiration breakpoints — resp. rate vs. barn THI\n"
+                "(broken-stick regression)",
+            )
+            ax.legend(fontsize=9)
+            for i, y in enumerate(valid_years):
+                n = len(valid_data[i])
+                ax.text(i + 1, ax.get_ylim()[0] + 0.5, f"n={n}",
+                        ha="center", fontsize=9, color="#555555")
+            save_fig(fig, "broken_stick_resp_thi_boxplot", out_dir)
+
+    # ── Respiration vs barn temp breakpoint boxplot ──────────
+    resp_temp_conv = results[results["resp_temp_converged"] == True]
+    if not resp_temp_conv.empty:
+        fig, ax = plt.subplots(figsize=(8, 5))
+        data_resp_temp = [
+            resp_temp_conv[resp_temp_conv["year"] == y]["resp_temp_breakpoint"].dropna().values
+            for y in years
+        ]
+        valid_years_t = [y for y, d in zip(years, data_resp_temp) if len(d) > 0]
+        valid_data_t = [d for d in data_resp_temp if len(d) > 0]
+        if valid_data_t:
+            bp = ax.boxplot(
+                valid_data_t, labels=[str(y) for y in valid_years_t],
+                patch_artist=True,
+                boxprops=dict(facecolor=COLOURS["box_temp"], edgecolor="#333333"),
+                medianprops=dict(color=COLOURS["median"], linewidth=2),
+            )
+            ax.set_xlabel("Year")
+            ax.set_ylabel("Individual barn temp breakpoint (°C, respiration)")
+            ax.set_title(
+                "Per-animal respiration breakpoints — resp. rate vs. barn temperature\n"
+                "(broken-stick regression)",
+            )
+            for i, y in enumerate(valid_years_t):
+                n = len(valid_data_t[i])
+                ax.text(i + 1, ax.get_ylim()[0] + 0.3, f"n={n}",
+                        ha="center", fontsize=9, color="#555555")
+            save_fig(fig, "broken_stick_resp_temp_boxplot", out_dir)
+
+    # ── Body temp bp vs Respiration bp scatter ───────────────
+    both_resp = results[
+        results["thi_converged"] & results["resp_thi_converged"]
+    ]
+    if len(both_resp) > 5:
+        fig, ax = plt.subplots(figsize=(7, 6))
+        colors = COLOURS["year"]
+        for y in years:
+            sub = both_resp[both_resp["year"] == y]
+            if not sub.empty:
+                ax.scatter(
+                    sub["thi_breakpoint"], sub["resp_thi_breakpoint"],
+                    s=30, alpha=0.7, label=str(y),
+                    color=colors.get(y, "#888888"),
+                )
+        lims = [
+            min(both_resp["thi_breakpoint"].min(), both_resp["resp_thi_breakpoint"].min()) - 2,
+            max(both_resp["thi_breakpoint"].max(), both_resp["resp_thi_breakpoint"].max()) + 2,
+        ]
+        ax.plot(lims, lims, "--", color=COLOURS["identity"], linewidth=1,
+                label="Identity line")
+        ax.set_xlabel("Rumen temp THI breakpoint")
+        ax.set_ylabel("Respiration rate THI breakpoint")
+        ax.set_title("Individual THI breakpoints: rumen temperature vs. respiration")
+        ax.legend(fontsize=9)
+        save_fig(fig, "broken_stick_bodytemp_vs_resp_bp", out_dir)
 
     # ── Example animal: fitted curve ─────────────────────────
     # Pick the animal with the best THI R²
@@ -1163,7 +1362,7 @@ def compute_behavioural_response(
         bp = row["thi_breakpoint"]
         year = int(row["year"])
 
-        # Get behaviour data
+        # Get behaviour data (smaxtec)
         beh = query_df(con, SQL_BEHAVIOUR, (aid, enter, exit_))
         if len(beh) < 50:
             continue
@@ -1186,7 +1385,7 @@ def compute_behavioural_response(
         if len(below) < 10 or len(above) < 10:
             continue
 
-        records.append({
+        rec = {
             "animal_id": aid,
             "year": year,
             "thi_breakpoint": bp,
@@ -1198,7 +1397,24 @@ def compute_behavioural_response(
             "body_temp_above": above["body_temp"].mean(),
             "n_below": len(below),
             "n_above": len(above),
-        })
+        }
+
+        # Get respiration data (gouna) — may not exist for this animal
+        resp_df = load_respiration_data(con, aid, enter, exit_, barn_cache=barn_cache)
+        if len(resp_df) >= 30:
+            resp_below = resp_df[resp_df["barn_thi"] <= bp]
+            resp_above = resp_df[resp_df["barn_thi"] > bp]
+            if len(resp_below) >= 5 and len(resp_above) >= 5:
+                rec["resp_below"] = resp_below["resp_rate"].mean()
+                rec["resp_above"] = resp_above["resp_rate"].mean()
+            else:
+                rec["resp_below"] = np.nan
+                rec["resp_above"] = np.nan
+        else:
+            rec["resp_below"] = np.nan
+            rec["resp_above"] = np.nan
+
+        records.append(rec)
 
     if not records:
         log.warning("No behavioural data collected")
@@ -1209,16 +1425,25 @@ def compute_behavioural_response(
     log.info("Behavioural response: %d animals", len(beh_df))
 
     # ── paired comparison plots ──────────────────────────────
-    fig, axes = plt.subplots(1, 3, figsize=(14, 5))
+    has_resp_data = beh_df["resp_below"].notna().sum() > 5
+    n_panels = 4 if has_resp_data else 3
+    fig, axes = plt.subplots(1, n_panels, figsize=(4.5 * n_panels, 5))
 
-    for ax, below_col, above_col, ylabel, title in [
-        (axes[0], "body_temp_below", "body_temp_above",
+    panels = [
+        ("body_temp_below", "body_temp_above",
          "Mean rumen temperature (°C)", "Rumen temperature"),
-        (axes[1], "act_below", "act_above",
+        ("act_below", "act_above",
          "Mean activity index", "Activity"),
-        (axes[2], "rum_below", "rum_above",
+        ("rum_below", "rum_above",
          "Mean rumination index", "Rumination"),
-    ]:
+    ]
+    if has_resp_data:
+        panels.append(
+            ("resp_below", "resp_above",
+             "Mean respiration rate (bpm)", "Respiration"),
+        )
+
+    for ax, (below_col, above_col, ylabel, title) in zip(axes, panels):
         below_vals = beh_df[below_col].dropna()
         above_vals = beh_df[above_col].dropna()
 
@@ -1287,12 +1512,16 @@ def generate_summary_table(results: pd.DataFrame, out_dir: Path) -> None:
         yr = results[results["year"] == year]
         thi_conv = yr[yr["thi_converged"] == True]
         temp_conv = yr[yr["temp_converged"] == True]
+        resp_thi_conv = yr[yr.get("resp_thi_converged", False) == True] if "resp_thi_converged" in yr.columns else pd.DataFrame()
+        resp_temp_conv = yr[yr.get("resp_temp_converged", False) == True] if "resp_temp_converged" in yr.columns else pd.DataFrame()
 
         rows.append({
             "Year": year,
             "n_animals": len(yr),
             "n_THI_converged": len(thi_conv),
             "n_temp_converged": len(temp_conv),
+            "n_resp_THI_converged": len(resp_thi_conv),
+            "n_resp_temp_converged": len(resp_temp_conv),
             "THI_bp_median": thi_conv["thi_breakpoint"].median() if len(thi_conv) > 0 else np.nan,
             "THI_bp_IQR": (
                 f"[{thi_conv['thi_breakpoint'].quantile(0.25):.1f}–"
@@ -1313,11 +1542,15 @@ def generate_summary_table(results: pd.DataFrame, out_dir: Path) -> None:
     # Add overall row
     thi_all = results[results["thi_converged"] == True]
     temp_all = results[results["temp_converged"] == True]
+    resp_thi_all = results[results.get("resp_thi_converged", False) == True] if "resp_thi_converged" in results.columns else pd.DataFrame()
+    resp_temp_all = results[results.get("resp_temp_converged", False) == True] if "resp_temp_converged" in results.columns else pd.DataFrame()
     rows.append({
         "Year": "All",
         "n_animals": len(results),
         "n_THI_converged": len(thi_all),
         "n_temp_converged": len(temp_all),
+        "n_resp_THI_converged": len(resp_thi_all),
+        "n_resp_temp_converged": len(resp_temp_all),
         "THI_bp_median": thi_all["thi_breakpoint"].median() if len(thi_all) > 0 else np.nan,
         "THI_bp_IQR": (
             f"[{thi_all['thi_breakpoint'].quantile(0.25):.1f}–"
@@ -1397,11 +1630,17 @@ def main() -> None:
 
     converged_thi = results[results["thi_converged"] == True]
     converged_temp = results[results["temp_converged"] == True]
+    converged_resp_thi = results[results["resp_thi_converged"] == True] if "resp_thi_converged" in results.columns else pd.DataFrame()
+    converged_resp_temp = results[results["resp_temp_converged"] == True] if "resp_temp_converged" in results.columns else pd.DataFrame()
+    n_with_resp = (results["n_resp_readings"] > 0).sum() if "n_resp_readings" in results.columns else 0
     log.info(
-        "  Converged: %d/%d THI fits, %d/%d barn temp fits",
+        "  Converged: %d/%d THI, %d/%d barn temp, %d/%d resp-THI, %d/%d resp-temp",
         len(converged_thi), len(results),
         len(converged_temp), len(results),
+        len(converged_resp_thi), len(results),
+        len(converged_resp_temp), len(results),
     )
+    log.info("  Animals with gouna data: %d/%d", n_with_resp, len(results))
 
     # ── 2. Spearman correlations ─────────────────────────────
     log.info("=" * 60)
