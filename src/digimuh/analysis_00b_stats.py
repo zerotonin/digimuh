@@ -372,11 +372,14 @@ def run_statistical_tests(beh: pd.DataFrame) -> pd.DataFrame:
     - Body temp below vs above breakpoint
     - Respiration below vs above breakpoint (if available)
 
+    Effect size is the matched-pairs rank-biserial correlation:
+    r_rb = 1 − 2W / [n(n+1)/2], bounded [−1, 1].
+
     Args:
         beh: behavioural_response DataFrame.
 
     Returns:
-        DataFrame: one row per test, with raw p, adjusted p, stars.
+        DataFrame: one row per test, with raw p, adjusted p, r_rb, stars.
     """
     test_rows = []
     years = sorted(beh["year"].dropna().unique().astype(int))
@@ -389,9 +392,11 @@ def run_statistical_tests(beh: pd.DataFrame) -> pd.DataFrame:
         paired = yr.dropna(subset=["body_temp_below", "body_temp_above"])
         if len(paired) >= 10:
             stat, p = wilcoxon(paired["body_temp_below"], paired["body_temp_above"])
+            n_pairs = len(paired)
+            r_rb = 1 - (2 * stat) / (n_pairs * (n_pairs + 1) / 2)
             year_tests.append({
                 "year": year, "test": "body_temp below vs above",
-                "n": len(paired), "statistic": stat, "p_raw": p,
+                "n": n_pairs, "statistic": stat, "p_raw": p, "r_rb": r_rb,
                 "median_below": paired["body_temp_below"].median(),
                 "median_above": paired["body_temp_above"].median(),
                 "median_diff": (paired["body_temp_above"] - paired["body_temp_below"]).median(),
@@ -401,9 +406,11 @@ def run_statistical_tests(beh: pd.DataFrame) -> pd.DataFrame:
         paired_r = yr.dropna(subset=["resp_below", "resp_above"])
         if len(paired_r) >= 10:
             stat, p = wilcoxon(paired_r["resp_below"], paired_r["resp_above"])
+            n_pairs = len(paired_r)
+            r_rb = 1 - (2 * stat) / (n_pairs * (n_pairs + 1) / 2)
             year_tests.append({
                 "year": year, "test": "respiration below vs above",
-                "n": len(paired_r), "statistic": stat, "p_raw": p,
+                "n": n_pairs, "statistic": stat, "p_raw": p, "r_rb": r_rb,
                 "median_below": paired_r["resp_below"].median(),
                 "median_above": paired_r["resp_above"].median(),
                 "median_diff": (paired_r["resp_above"] - paired_r["resp_below"]).median(),
@@ -562,8 +569,8 @@ def main() -> None:
     tests.to_csv(d / "statistical_tests.csv", index=False)
     for _, t in tests.iterrows():
         log.info(
-            "  %d | %-30s | n=%3d | p_raw=%.4f | p_adj=%.4f | %s",
-            t["year"], t["test"], t["n"], t["p_raw"], t["p_adj"], t["stars"],
+            "  %d | %-30s | n=%3d | r_rb=%+.3f | p_raw=%.4f | p_adj=%.4f | %s",
+            t["year"], t["test"], t["n"], t["r_rb"], t["p_raw"], t["p_adj"], t["stars"],
         )
 
     # 5. Breakpoint stability
