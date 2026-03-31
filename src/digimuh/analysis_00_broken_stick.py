@@ -160,18 +160,31 @@ def broken_stick_fit(
     ss_tot = np.sum((y - np.mean(y)) ** 2)
     r_sq = 1 - final_rss / ss_tot if ss_tot > 0 else np.nan
 
+    # ── biological plausibility check ───────────────────────
+    # Heat stress means body temp rises FASTER above the
+    # breakpoint.  If the above-slope is negative or flatter
+    # than the below-slope, the fit is spurious (e.g. peaked
+    # shape from sparse data at the high end).
+    slope_below = coef_left[1]
+    slope_above = coef_right[1]
+    biologically_valid = slope_above > slope_below and slope_above > 0
+
     return {
-        "breakpoint": bp,
-        "slope_below": coef_left[1],
+        "breakpoint": bp if biologically_valid else np.nan,
+        "slope_below": slope_below,
         "intercept_below": coef_left[0],
-        "slope_above": coef_right[1],
+        "slope_above": slope_above,
         "intercept_above": coef_right[0],
         "r_squared": r_sq,
         "rss": final_rss,
         "n": n,
         "n_below": int(left.sum()),
         "n_above": int(right.sum()),
-        "converged": True,
+        "converged": biologically_valid,
+        "rejected_reason": (
+            None if biologically_valid
+            else f"slope_above ({slope_above:.4f}) <= slope_below ({slope_below:.4f})"
+        ),
     }
 
 
@@ -216,68 +229,151 @@ def load_tierauswahl(path: Path) -> pd.DataFrame:
     return df
 
 
-SQL_BROKEN_STICK = """
+SQL_RUMEN = """
 SELECT
-    sd.animal_id,
-    sd."timestamp",
-    CAST(strftime('%H', sd."timestamp") AS INTEGER) AS hour,
-    CAST(sd."temp_without_drink_cycles" AS REAL) AS body_temp,
-    sb.temp AS barn_temp,
-    sb.temp_hum_index AS barn_thi
-FROM smaxtec_derived sd
-INNER JOIN smaxtec_barns sb
-    ON date(sd."timestamp") = date(sb."timestamp")
-    AND CAST(strftime('%H', sd."timestamp") AS INTEGER)
-        = CAST(strftime('%H', sb."timestamp") AS INTEGER)
-WHERE sd.animal_id = ?
-  AND sd."timestamp" >= ?
-  AND sd."timestamp" <= ?
-  AND sd."temp_without_drink_cycles" IS NOT NULL
-  AND CAST(sd."temp_without_drink_cycles" AS REAL) > 30
-  AND CAST(sd."temp_without_drink_cycles" AS REAL) < 43
-  AND sb.temp IS NOT NULL
-  AND sb.temp_hum_index IS NOT NULL
+    animal_id,
+    "timestamp",
+    CAST("temp_without_drink_cycles" AS REAL) AS body_temp,
+    CAST("drink_cycles_v2" AS REAL) AS drink_cycles
+FROM smaxtec_derived
+WHERE animal_id = ?
+  AND "timestamp" >= ?
+  AND "timestamp" <= ?
+  AND "temp_without_drink_cycles" IS NOT NULL
+  AND CAST("temp_without_drink_cycles" AS REAL) > 30
+  AND CAST("temp_without_drink_cycles" AS REAL) < 43
 """
+
+SQL_BARN = """
+SELECT
+    "timestamp",
+    AVG(temp) AS barn_temp,
+    AVG(temp_hum_index) AS barn_thi
+FROM smaxtec_barns
+WHERE "timestamp" >= ?
+  AND "timestamp" <= ?
+  AND temp IS NOT NULL
+  AND temp_hum_index IS NOT NULL
+GROUP BY "timestamp"
+"""
+
+DRINK_PAD = pd.Timedelta(minutes=15)
+
+
+def _exclude_drinking_windows(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove rows during and 15 minutes after detected drinking events.
+
+    Drinking causes a cold-water artifact in rumen temperature.
+    smaXtec's ``temp_without_drink_cycles`` corrects the value, but
+    the post-drinking recovery period still shows depressed temperatures.
+    We exclude the drinking event timestamp plus a 15-minute padding
+    to eliminate this residual effect.
+
+    Args:
+        df: DataFrame with ``timestamp`` and ``drink_cycles`` columns.
+
+    Returns:
+        Filtered DataFrame with drinking windows removed.
+    """
+    if "drink_cycles" not in df.columns:
+        return df
+
+    # Identify drinking event timestamps
+    drink_times = df.loc[
+        df["drink_cycles"].fillna(0) > 0, "timestamp"
+    ].values
+
+    if len(drink_times) == 0:
+        return df.drop(columns=["drink_cycles"])
+
+    # Build exclusion mask: True = keep this row
+    keep = np.ones(len(df), dtype=bool)
+    ts = df["timestamp"].values
+
+    for dt in drink_times:
+        # Exclude [drink_time, drink_time + 15 min]
+        keep &= ~((ts >= dt) & (ts <= dt + DRINK_PAD))
+
+    n_excluded = (~keep).sum()
+    if n_excluded > 0:
+        log.debug(
+            "  Excluded %d readings in %d drinking windows (%.1f%%)",
+            n_excluded, len(drink_times),
+            100 * n_excluded / len(df),
+        )
+
+    return df.loc[keep].drop(columns=["drink_cycles"])
 
 
 def load_animal_data(
     con, animal_id: int, date_enter: str, date_exit: str,
-    barn_id: int | None = None,
+    barn_cache: dict | None = None,
 ) -> pd.DataFrame:
-    """Load joined rumen + barn data for one animal, excluding milking hours.
+    """Load rumen + barn data for one animal, filtered for analysis.
+
+    Queries smaxtec_derived and smaxtec_barns separately (both use
+    indexes efficiently) and joins in pandas by hour-rounded timestamp.
+
+    Filtering steps:
+    1. Remove drinking episodes + 15-min post-drinking recovery window.
+    2. Exclude milking hours (04:00–07:59 and 16:00–19:59).
+    3. Join with barn climate by hour.
 
     Args:
         con: Database connection.
         animal_id: EU ear tag integer.
         date_enter: Start of observation window (ISO date).
         date_exit: End of observation window (ISO date).
-        barn_id: Optional barn_id filter. If None, averages across barns.
+        barn_cache: Optional dict mapping (enter, exit) → barn DataFrame
+            to avoid re-querying barn data for the same date range.
 
     Returns:
         DataFrame with body_temp, barn_temp, barn_thi columns,
-        milking hours excluded.
+        drinking and milking periods excluded.
     """
-    sql = SQL_BROKEN_STICK
-    params = (animal_id, date_enter, date_exit)
+    # ── rumen data (uses idx_smaxtec_derived_animal_ts) ──────
+    rumen = query_df(con, SQL_RUMEN, (animal_id, date_enter, date_exit))
+    if rumen.empty:
+        return rumen
 
-    if barn_id is not None:
-        sql += " AND sb.barn_id = ?"
-        params = (animal_id, date_enter, date_exit, barn_id)
+    rumen["timestamp"] = pd.to_datetime(rumen["timestamp"])
 
-    df = query_df(con, sql, params)
+    # ── exclude drinking episodes + 15 min padding ───────────
+    rumen = _exclude_drinking_windows(rumen)
+    if rumen.empty:
+        return rumen
+
+    rumen["hour_key"] = rumen["timestamp"].dt.floor("h")
+
+    # ── barn climate (cached across animals in same date range) ──
+    cache_key = (date_enter, date_exit)
+    if barn_cache is not None and cache_key in barn_cache:
+        barn = barn_cache[cache_key]
+    else:
+        barn = query_df(con, SQL_BARN, (date_enter, date_exit))
+        if not barn.empty:
+            barn["timestamp"] = pd.to_datetime(barn["timestamp"])
+            barn["hour_key"] = barn["timestamp"].dt.floor("h")
+            # Average barn readings per hour (in case of sub-hourly data)
+            barn = barn.groupby("hour_key").agg(
+                barn_temp=("barn_temp", "mean"),
+                barn_thi=("barn_thi", "mean"),
+            ).reset_index()
+        if barn_cache is not None:
+            barn_cache[cache_key] = barn
+
+    if barn.empty:
+        return pd.DataFrame()
+
+    # ── merge on hour ────────────────────────────────────────
+    df = rumen.merge(barn, on="hour_key", how="inner")
 
     if df.empty:
         return df
 
-    # Exclude milking hours (04:00–07:59 and 16:00–19:59)
-    df = df[~df["hour"].between(4, 7) & ~df["hour"].between(16, 19)]
-
-    # Average barn readings if multiple sensors matched the same hour
-    df = df.groupby(["animal_id", "timestamp"]).agg(
-        body_temp=("body_temp", "first"),
-        barn_temp=("barn_temp", "mean"),
-        barn_thi=("barn_thi", "mean"),
-    ).reset_index()
+    # ── exclude milking hours (04:00–07:59 and 16:00–19:59) ──
+    hour = df["timestamp"].dt.hour
+    df = df[~hour.between(4, 7) & ~hour.between(16, 19)]
 
     return df
 
@@ -301,6 +397,7 @@ def run_broken_stick_analysis(
     """
     results = []
     total = len(tierauswahl)
+    barn_cache: dict = {}  # cache barn data across animals in same date range
 
     for i, (_, row) in enumerate(tierauswahl.iterrows()):
         aid = int(row["animal_id"])
@@ -311,7 +408,7 @@ def run_broken_stick_analysis(
         if (i + 1) % 20 == 0 or i == 0:
             log.info("  [%d/%d] Processing animal %d (%s) …", i + 1, total, aid, year)
 
-        df = load_animal_data(con, aid, enter, exit_)
+        df = load_animal_data(con, aid, enter, exit_, barn_cache=barn_cache)
 
         if len(df) < 50:
             log.debug("  Animal %d: only %d readings, skipping", aid, len(df))
@@ -366,9 +463,12 @@ def run_broken_stick_analysis(
         }
 
         if not thi_fit.get("converged", False):
-            result["comment"] = "THI: no breakpoint found"
+            reason = thi_fit.get("rejected_reason", "no breakpoint found")
+            result["comment"] = f"THI: {reason}"
         if not temp_fit.get("converged", False):
-            result["comment"] += "; Temp: no breakpoint found" if result["comment"] else "Temp: no breakpoint found"
+            reason = temp_fit.get("rejected_reason", "no breakpoint found")
+            prefix = "; " if result["comment"] else ""
+            result["comment"] += f"{prefix}Temp: {reason}"
 
         results.append(result)
 
