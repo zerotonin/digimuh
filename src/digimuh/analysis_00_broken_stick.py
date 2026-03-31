@@ -1094,6 +1094,9 @@ def analyse_breakpoint_predictors(results: pd.DataFrame, out_dir: Path) -> None:
             ax.scatter(sub[bp_col], sub["lactation_nr"] + jitter,
                        s=20, alpha=0.5, color=COLOURS["scatter_alt"])
             r, p = pearsonr(sub[bp_col], sub["lactation_nr"])
+            z = np.polyfit(sub[bp_col], sub["lactation_nr"], 1)
+            x_line = np.linspace(sub[bp_col].min(), sub[bp_col].max(), 50)
+            ax.plot(x_line, np.polyval(z, x_line), "--", color=COLOURS["fit_line"])
             ax.set_title(f"r = {r:.3f}, p = {p:.3f}, n = {len(sub)}", fontsize=10)
         else:
             ax.text(0.5, 0.5, f"Insufficient data\n(n={len(sub)} with lactation nr)",
