@@ -114,13 +114,13 @@ def ensure_source_file(con: sqlite3.Connection, filepath: Path) -> int:
     """Register a source file and return its ID."""
     fname = filepath.name
     existing = con.execute(
-        "SELECT file_id FROM source_files WHERE file_name = ?", (fname,)
+        "SELECT file_id FROM source_files WHERE filename = ?", (fname,)
     ).fetchone()
     if existing:
         return existing[0]
     cur = con.execute(
-        "INSERT INTO source_files (file_name, file_path, system) VALUES (?, ?, ?)",
-        (fname, str(filepath), "gouna"),
+        "INSERT INTO source_files (filename, folder) VALUES (?, ?)",
+        (fname, str(filepath.parent)),
     )
     return cur.lastrowid
 
@@ -182,18 +182,31 @@ def ingest_file(con: sqlite3.Connection, filepath: Path, dry_run: bool = False) 
     inserted_before = con.execute("SELECT COUNT(*) FROM gouna WHERE animal_id = ?",
                                    (animal_id,)).fetchone()[0]
 
-    # Use INSERT OR IGNORE — duplicates on UNIQUE(animal_id, timestamp)
-    # are silently skipped.  executemany is orders of magnitude faster
-    # than row-by-row inserts.
-    rows = [
-        (animal_id, row["timestamp"], row["respirationfrequency"], file_id)
-        for _, row in df.iterrows()
-    ]
-    con.executemany(
-        'INSERT OR IGNORE INTO gouna (animal_id, "timestamp", respirationfrequency, source_file_id) '
-        'VALUES (?, ?, ?, ?)',
-        rows,
-    )
+    # Check if gouna table has source_file_id column
+    cur = con.execute("PRAGMA table_info('gouna')")
+    gouna_cols = {row[1] for row in cur.fetchall()}
+    has_source_file = "source_file_id" in gouna_cols
+
+    if has_source_file:
+        rows = [
+            (animal_id, row["timestamp"], row["respirationfrequency"], file_id)
+            for _, row in df.iterrows()
+        ]
+        con.executemany(
+            'INSERT OR IGNORE INTO gouna (animal_id, "timestamp", respirationfrequency, source_file_id) '
+            'VALUES (?, ?, ?, ?)',
+            rows,
+        )
+    else:
+        rows = [
+            (animal_id, row["timestamp"], row["respirationfrequency"])
+            for _, row in df.iterrows()
+        ]
+        con.executemany(
+            'INSERT OR IGNORE INTO gouna (animal_id, "timestamp", respirationfrequency) '
+            'VALUES (?, ?, ?)',
+            rows,
+        )
     con.commit()
 
     inserted_after = con.execute("SELECT COUNT(*) FROM gouna WHERE animal_id = ?",
