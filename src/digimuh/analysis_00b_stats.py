@@ -126,6 +126,242 @@ def broken_stick_fit(
 
 
 # ─────────────────────────────────────────────────────────────
+#  « Davies test for breakpoint existence »
+# ─────────────────────────────────────────────────────────────
+
+def davies_test(
+    x: np.ndarray, y: np.ndarray,
+    k: int = 10,
+    x_range: tuple[float, float] | None = None,
+) -> dict:
+    """Davies (1987/2002) test for existence of a breakpoint.
+
+    Tests H0: the relationship is a single straight line (no breakpoint)
+    vs H1: there is an unknown breakpoint where the slope changes.
+
+    The procedure evaluates k candidate breakpoints, computes a naive
+    t-statistic for the slope-difference at each, takes the maximum,
+    and corrects the p-value for the search using Davies' upper bound.
+
+    Args:
+        x: Predictor variable (THI or barn temp).
+        y: Response variable (body temp or resp rate).
+        k: Number of evaluation points (default 10, as in R segmented).
+        x_range: Search range for candidate breakpoints.
+
+    Returns:
+        Dict with p_value, best_at (candidate with strongest signal),
+        max_statistic, and n_sign_changes.
+
+    References:
+        Davies RB (1987) Biometrika 74:33-43.
+        Davies RB (2002) Biometrika 89:484-489.
+    """
+    from scipy.stats import t as t_dist, norm
+
+    mask = np.isfinite(x) & np.isfinite(y)
+    x, y = x[mask], y[mask]
+    n = len(x)
+    if n < 30:
+        return {"p_value": np.nan, "best_at": np.nan, "max_statistic": np.nan, "n": n}
+
+    if x_range is None:
+        x_range = (np.percentile(x, 5), np.percentile(x, 95))
+
+    # k evaluation points spanning the predictor range
+    psi_candidates = np.linspace(x_range[0], x_range[1], k)
+
+    t_stats = np.full(k, np.nan)
+    for j, psi in enumerate(psi_candidates):
+        # Segmented variable: (x - psi)_+ = max(x - psi, 0)
+        seg_var = np.maximum(x - psi, 0.0)
+
+        # Design matrix: [1, x, (x-psi)+]
+        X_design = np.column_stack([np.ones(n), x, seg_var])
+
+        # OLS fit
+        try:
+            beta, residuals, rank, sv = np.linalg.lstsq(X_design, y, rcond=None)
+        except np.linalg.LinAlgError:
+            continue
+
+        if rank < 3:
+            continue
+
+        # Residuals and variance
+        y_hat = X_design @ beta
+        resid = y - y_hat
+        df = n - 3
+        if df <= 0:
+            continue
+        sigma2 = np.sum(resid ** 2) / df
+
+        # Standard error of the slope-difference coefficient (beta[2])
+        try:
+            XtX_inv = np.linalg.inv(X_design.T @ X_design)
+        except np.linalg.LinAlgError:
+            continue
+
+        se_delta = np.sqrt(sigma2 * XtX_inv[2, 2])
+        if se_delta <= 0:
+            continue
+
+        t_stats[j] = beta[2] / se_delta
+
+    # Remove NaNs
+    valid_t = t_stats[np.isfinite(t_stats)]
+    if len(valid_t) < 2:
+        return {"p_value": np.nan, "best_at": np.nan, "max_statistic": np.nan, "n": n}
+
+    # Maximum absolute t-statistic
+    abs_t = np.abs(valid_t)
+    M = np.max(abs_t)
+    best_idx = np.nanargmax(np.abs(t_stats))
+    best_psi = psi_candidates[best_idx]
+
+    # Count sign changes in the t-statistic sequence
+    signs = np.sign(valid_t)
+    sign_changes = np.sum(np.abs(np.diff(signs)) > 0)
+
+    # Davies (1987) approximate upper bound for p-value
+    # p <= Pr(|T| > M) + V * phi(M)
+    # where V = number of sign changes, phi = standard normal density
+    df = n - 3
+    if df > 300:
+        # Large sample: use normal approximation (exact gamma overflows)
+        p_naive = 2.0 * (1.0 - norm.cdf(M))
+        phi_M = norm.pdf(M)
+    else:
+        p_naive = 2.0 * (1.0 - t_dist.cdf(M, df))
+        phi_M = t_dist.pdf(M, df)
+
+    p_davies = p_naive + sign_changes * phi_M
+    p_davies = min(p_davies, 1.0)
+
+    return {
+        "p_value": p_davies,
+        "best_at": best_psi,
+        "max_statistic": M,
+        "n_sign_changes": int(sign_changes),
+        "n": n,
+    }
+
+
+# ─────────────────────────────────────────────────────────────
+#  « Pseudo-Score test (Muggeo 2016) »
+# ─────────────────────────────────────────────────────────────
+
+def pscore_test(
+    x: np.ndarray, y: np.ndarray,
+    k: int = 10,
+    x_range: tuple[float, float] | None = None,
+) -> dict:
+    """Pseudo-Score test for breakpoint existence (Muggeo 2016).
+
+    More powerful than Davies test for detecting a single changepoint.
+    Averages the segmented variable over k candidate breakpoints and
+    tests whether this averaged term is significant in the augmented
+    linear model.
+
+    The key insight: under H0 (no breakpoint), the averaged segmented
+    variable phi_bar has zero coefficient.  Under H1 (one breakpoint),
+    phi_bar picks up the slope change regardless of the true breakpoint
+    location.
+
+    Args:
+        x: Predictor variable (THI or barn temp).
+        y: Response variable (body temp or resp rate).
+        k: Number of evaluation points.
+        x_range: Search range for candidate breakpoints.
+
+    Returns:
+        Dict with p_value, t_statistic, best_at, and df.
+
+    References:
+        Muggeo VMR (2016) J Stat Comput Simul 86:3059-3067.
+    """
+    from scipy.stats import t as t_dist
+
+    mask = np.isfinite(x) & np.isfinite(y)
+    x, y = x[mask], y[mask]
+    n = len(x)
+    if n < 30:
+        return {"p_value": np.nan, "t_statistic": np.nan, "n": n}
+
+    if x_range is None:
+        x_range = (np.percentile(x, 5), np.percentile(x, 95))
+
+    # k evaluation points
+    psi_candidates = np.linspace(x_range[0], x_range[1], k)
+
+    # Averaged segmented variable:
+    # phi_bar_i = (1/k) * sum_j max(x_i - psi_j, 0)
+    phi_bar = np.zeros(n)
+    for psi in psi_candidates:
+        phi_bar += np.maximum(x - psi, 0.0)
+    phi_bar /= k
+
+    # Augmented model: y = alpha + beta*x + gamma*phi_bar
+    X_design = np.column_stack([np.ones(n), x, phi_bar])
+
+    try:
+        beta, residuals, rank, sv = np.linalg.lstsq(X_design, y, rcond=None)
+    except np.linalg.LinAlgError:
+        return {"p_value": np.nan, "t_statistic": np.nan, "n": n}
+
+    if rank < 3:
+        return {"p_value": np.nan, "t_statistic": np.nan, "n": n}
+
+    y_hat = X_design @ beta
+    resid = y - y_hat
+    df = n - 3
+    if df <= 0:
+        return {"p_value": np.nan, "t_statistic": np.nan, "n": n}
+
+    sigma2 = np.sum(resid ** 2) / df
+
+    try:
+        XtX_inv = np.linalg.inv(X_design.T @ X_design)
+    except np.linalg.LinAlgError:
+        return {"p_value": np.nan, "t_statistic": np.nan, "n": n}
+
+    se_gamma = np.sqrt(sigma2 * XtX_inv[2, 2])
+    if se_gamma <= 0:
+        return {"p_value": np.nan, "t_statistic": np.nan, "n": n}
+
+    t_stat = beta[2] / se_gamma
+    p_value = 2.0 * (1.0 - t_dist.cdf(abs(t_stat), df))
+
+    # Also find which candidate psi gave the strongest individual signal
+    # (for reporting, not for the test itself)
+    best_t = 0.0
+    best_psi = np.nan
+    for psi in psi_candidates:
+        seg = np.maximum(x - psi, 0.0)
+        Xd = np.column_stack([np.ones(n), x, seg])
+        try:
+            b, *_ = np.linalg.lstsq(Xd, y, rcond=None)
+            yh = Xd @ b
+            r = y - yh
+            s2 = np.sum(r ** 2) / (n - 3)
+            inv_xx = np.linalg.inv(Xd.T @ Xd)
+            se = np.sqrt(s2 * inv_xx[2, 2])
+            if se > 0 and abs(b[2] / se) > abs(best_t):
+                best_t = b[2] / se
+                best_psi = psi
+        except (np.linalg.LinAlgError, ValueError):
+            continue
+
+    return {
+        "p_value": p_value,
+        "t_statistic": t_stat,
+        "best_at": best_psi,
+        "df": df,
+        "n": n,
+    }
+
+
+# ─────────────────────────────────────────────────────────────
 #  « Benjamini-Hochberg FDR »
 # ─────────────────────────────────────────────────────────────
 
@@ -226,6 +462,16 @@ def run_broken_stick_fits(
         temp_fit = broken_stick_fit(
             grp["barn_temp"].values, grp["body_temp"].values, x_range=(5, 35))
 
+        # Breakpoint existence tests (body temp)
+        thi_davies = davies_test(
+            grp["barn_thi"].values, grp["body_temp"].values, x_range=(45, 80))
+        thi_pscore = pscore_test(
+            grp["barn_thi"].values, grp["body_temp"].values, x_range=(45, 80))
+        temp_davies = davies_test(
+            grp["barn_temp"].values, grp["body_temp"].values, x_range=(5, 35))
+        temp_pscore = pscore_test(
+            grp["barn_temp"].values, grp["body_temp"].values, x_range=(5, 35))
+
         # Respiration fits
         resp_grp = resp[
             (resp["animal_id"] == aid) & (resp["year"] == year)
@@ -239,9 +485,25 @@ def run_broken_stick_fits(
             resp_temp_fit = broken_stick_fit(
                 resp_grp["barn_temp"].values, resp_grp["resp_rate"].values,
                 x_range=(5, 35))
+            # Breakpoint existence tests (respiration)
+            resp_thi_davies = davies_test(
+                resp_grp["barn_thi"].values, resp_grp["resp_rate"].values,
+                x_range=(45, 80))
+            resp_thi_pscore = pscore_test(
+                resp_grp["barn_thi"].values, resp_grp["resp_rate"].values,
+                x_range=(45, 80))
+            resp_temp_davies = davies_test(
+                resp_grp["barn_temp"].values, resp_grp["resp_rate"].values,
+                x_range=(5, 35))
+            resp_temp_pscore = pscore_test(
+                resp_grp["barn_temp"].values, resp_grp["resp_rate"].values,
+                x_range=(5, 35))
         else:
             resp_thi_fit = {"breakpoint": np.nan, "converged": False, "n": 0}
             resp_temp_fit = {"breakpoint": np.nan, "converged": False, "n": 0}
+            _empty_test = {"p_value": np.nan}
+            resp_thi_davies = resp_thi_pscore = _empty_test
+            resp_temp_davies = resp_temp_pscore = _empty_test
 
         rec = {
             "animal_id": aid, "year": int(year), "date_enter": enter,
@@ -253,22 +515,30 @@ def run_broken_stick_fits(
             "thi_slope_above": thi_fit.get("slope_above"),
             "thi_r_squared": thi_fit.get("r_squared"),
             "thi_converged": thi_fit["converged"],
+            "thi_davies_p": thi_davies["p_value"],
+            "thi_pscore_p": thi_pscore["p_value"],
             # Body temp vs barn temp
             "temp_breakpoint": temp_fit["breakpoint"],
             "temp_slope_below": temp_fit.get("slope_below"),
             "temp_slope_above": temp_fit.get("slope_above"),
             "temp_r_squared": temp_fit.get("r_squared"),
             "temp_converged": temp_fit["converged"],
+            "temp_davies_p": temp_davies["p_value"],
+            "temp_pscore_p": temp_pscore["p_value"],
             # Resp vs THI
             "resp_thi_breakpoint": resp_thi_fit["breakpoint"],
             "resp_thi_slope_below": resp_thi_fit.get("slope_below"),
             "resp_thi_slope_above": resp_thi_fit.get("slope_above"),
             "resp_thi_r_squared": resp_thi_fit.get("r_squared"),
             "resp_thi_converged": resp_thi_fit.get("converged", False),
+            "resp_thi_davies_p": resp_thi_davies["p_value"],
+            "resp_thi_pscore_p": resp_thi_pscore["p_value"],
             # Resp vs barn temp
             "resp_temp_breakpoint": resp_temp_fit["breakpoint"],
             "resp_temp_r_squared": resp_temp_fit.get("r_squared"),
             "resp_temp_converged": resp_temp_fit.get("converged", False),
+            "resp_temp_davies_p": resp_temp_davies["p_value"],
+            "resp_temp_pscore_p": resp_temp_pscore["p_value"],
         }
         results.append(rec)
 
@@ -372,14 +642,11 @@ def run_statistical_tests(beh: pd.DataFrame) -> pd.DataFrame:
     - Body temp below vs above breakpoint
     - Respiration below vs above breakpoint (if available)
 
-    Effect size is the matched-pairs rank-biserial correlation:
-    r_rb = 1 − 2W / [n(n+1)/2], bounded [−1, 1].
-
     Args:
         beh: behavioural_response DataFrame.
 
     Returns:
-        DataFrame: one row per test, with raw p, adjusted p, r_rb, stars.
+        DataFrame: one row per test, with raw p, adjusted p, stars.
     """
     test_rows = []
     years = sorted(beh["year"].dropna().unique().astype(int))
@@ -392,11 +659,9 @@ def run_statistical_tests(beh: pd.DataFrame) -> pd.DataFrame:
         paired = yr.dropna(subset=["body_temp_below", "body_temp_above"])
         if len(paired) >= 10:
             stat, p = wilcoxon(paired["body_temp_below"], paired["body_temp_above"])
-            n_pairs = len(paired)
-            r_rb = 1 - (2 * stat) / (n_pairs * (n_pairs + 1) / 2)
             year_tests.append({
                 "year": year, "test": "body_temp below vs above",
-                "n": n_pairs, "statistic": stat, "p_raw": p, "r_rb": r_rb,
+                "n": len(paired), "statistic": stat, "p_raw": p,
                 "median_below": paired["body_temp_below"].median(),
                 "median_above": paired["body_temp_above"].median(),
                 "median_diff": (paired["body_temp_above"] - paired["body_temp_below"]).median(),
@@ -406,11 +671,9 @@ def run_statistical_tests(beh: pd.DataFrame) -> pd.DataFrame:
         paired_r = yr.dropna(subset=["resp_below", "resp_above"])
         if len(paired_r) >= 10:
             stat, p = wilcoxon(paired_r["resp_below"], paired_r["resp_above"])
-            n_pairs = len(paired_r)
-            r_rb = 1 - (2 * stat) / (n_pairs * (n_pairs + 1) / 2)
             year_tests.append({
                 "year": year, "test": "respiration below vs above",
-                "n": n_pairs, "statistic": stat, "p_raw": p, "r_rb": r_rb,
+                "n": len(paired_r), "statistic": stat, "p_raw": p,
                 "median_below": paired_r["resp_below"].median(),
                 "median_above": paired_r["resp_above"].median(),
                 "median_diff": (paired_r["resp_above"] - paired_r["resp_below"]).median(),
@@ -547,6 +810,26 @@ def main() -> None:
         n_conv = (bs[f"{prefix}_converged"] == True).sum()
         log.info("  %s: %d/%d converged", label, n_conv, len(bs))
 
+    # Breakpoint existence test summary
+    log.info("─" * 50)
+    log.info("  Breakpoint existence tests (p < 0.05):")
+    for prefix, label in [("thi", "THI→body"), ("temp", "Temp→body"),
+                          ("resp_thi", "THI→resp"), ("resp_temp", "Temp→resp")]:
+        davies_col = f"{prefix}_davies_p"
+        pscore_col = f"{prefix}_pscore_p"
+        if davies_col not in bs.columns:
+            continue
+        n_valid = bs[davies_col].notna().sum()
+        if n_valid == 0:
+            continue
+        n_davies_sig = (bs[davies_col] < 0.05).sum()
+        n_pscore_sig = (bs[pscore_col] < 0.05).sum()
+        log.info(
+            "  %s: Davies %d/%d (%.0f%%), pscore %d/%d (%.0f%%)",
+            label, n_davies_sig, n_valid, 100 * n_davies_sig / n_valid,
+            n_pscore_sig, n_valid, 100 * n_pscore_sig / n_valid,
+        )
+
     # 2. Spearman correlations
     log.info("═" * 50)
     log.info("2. Spearman correlations …")
@@ -569,8 +852,8 @@ def main() -> None:
     tests.to_csv(d / "statistical_tests.csv", index=False)
     for _, t in tests.iterrows():
         log.info(
-            "  %d | %-30s | n=%3d | r_rb=%+.3f | p_raw=%.4f | p_adj=%.4f | %s",
-            t["year"], t["test"], t["n"], t["r_rb"], t["p_raw"], t["p_adj"], t["stars"],
+            "  %d | %-30s | n=%3d | p_raw=%.4f | p_adj=%.4f | %s",
+            t["year"], t["test"], t["n"], t["p_raw"], t["p_adj"], t["stars"],
         )
 
     # 5. Breakpoint stability
