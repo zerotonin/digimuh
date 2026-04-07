@@ -323,11 +323,11 @@ def main() -> None:
     parser.add_argument("--tierauswahl", type=Path, required=True)
     parser.add_argument("--out", type=Path, default=Path("results/broken_stick"))
     parser.add_argument(
-        "--no-drink-exclusion", action="store_true",
-        help="Skip the 15-min post-drinking exclusion window.  "
-             "Relies solely on smaXtec's temp_without_drink_cycles "
-             "correction.  Use this to test whether the extra exclusion "
-             "affects convergence rates.",
+        "--smaxtec-drink-correction", action="store_true",
+        help="Use only smaXtec's built-in temp_without_drink_cycles "
+             "correction for drinking events.  Default behaviour applies "
+             "an additional 15-min post-drinking exclusion window on top "
+             "of smaXtec's correction to remove residual recovery artifacts.",
     )
     args = parser.parse_args()
 
@@ -338,9 +338,11 @@ def main() -> None:
     )
     args.out.mkdir(parents=True, exist_ok=True)
 
-    exclude_drinking = not args.no_drink_exclusion
-    log.info("Drinking exclusion: %s",
-             "ON (15-min padding)" if exclude_drinking else "OFF (smaXtec correction only)")
+    exclude_drinking = not args.smaxtec_drink_correction
+    log.info("Drink correction: %s",
+             "smaXtec only (temp_without_drink_cycles)"
+             if not exclude_drinking
+             else "smaXtec + 15-min post-drinking exclusion window")
 
     con = connect_db(args.db)
     ta = load_tierauswahl(args.tierauswahl)
