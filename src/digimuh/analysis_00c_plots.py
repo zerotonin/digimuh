@@ -621,6 +621,185 @@ def plot_thi_vs_temp_scatter(bs: pd.DataFrame, out_dir: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────
+#  « threshold detection pipeline Sankey (plotly) »
+# ─────────────────────────────────────────────────────────────
+
+def plot_threshold_sankey(bs: pd.DataFrame, out_dir: Path) -> None:
+    """Plotly Sankey diagrams showing how animals flow through the
+    threshold detection pipeline: Davies/pscore → broken-stick → Hill.
+
+    Produces one figure for rumen temperature vs THI and one for
+    respiration rate vs THI.
+
+    Args:
+        bs: broken_stick_results.csv DataFrame.
+        out_dir: Output directory.
+    """
+    import plotly.graph_objects as go
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    configs = [
+        ("thi", "rumen", "Rumen temperature vs. barn THI",
+         lambda df: df),
+        ("resp_thi", "respiration", "Respiration rate vs. barn THI",
+         lambda df: df[df["n_resp_readings"] > 0]),
+    ]
+
+    for prefix, signal_name, title, filter_fn in configs:
+        davies_col = f"{prefix}_davies_p"
+        pscore_col = f"{prefix}_pscore_p"
+        conv_col = f"{prefix}_converged"
+        hill_conv_col = f"{prefix}_hill_converged"
+        hill_bend_col = f"{prefix}_hill_bend"
+
+        if davies_col not in bs.columns:
+            continue
+
+        subset = filter_fn(bs)
+        if subset.empty or len(subset) < 5:
+            continue
+
+        n_total = len(subset)
+
+        # Stage 1: Davies
+        n_davies_sig = (subset[davies_col].fillna(1) < 0.05).sum()
+        n_davies_ns = n_total - n_davies_sig
+
+        # Stage 1b: Pscore (parallel)
+        n_pscore_sig = (subset[pscore_col].fillna(1) < 0.05).sum()
+
+        # Stage 2: Broken-stick (from Davies sig)
+        davies_mask = subset[davies_col].fillna(1) < 0.05
+        n_bs_conv = (davies_mask & (subset[conv_col] == True)).sum()
+        n_bs_fail = n_davies_sig - n_bs_conv
+
+        # Stage 3: Hill (from BS-failed)
+        bs_fail_mask = davies_mask & (subset[conv_col] != True)
+        if hill_conv_col in subset.columns:
+            n_hill_ok = (
+                bs_fail_mask
+                & (subset[hill_conv_col] == True)
+                & subset[hill_bend_col].notna()
+            ).sum()
+        else:
+            n_hill_ok = 0
+        n_hill_fail = n_bs_fail - n_hill_ok
+
+        # Final tallies
+        n_threshold = n_bs_conv + n_hill_ok
+        n_no_threshold = n_davies_ns + n_hill_fail
+
+        # ── Node definitions ─────────────────────────────────
+        # 0: Total
+        # 1: Davies significant (nonlinear)
+        # 2: Davies n.s. (linear)
+        # 3: BS converged
+        # 4: BS failed
+        # 5: Hill onset found
+        # 6: Hill / no threshold
+        # 7: Threshold identified (final)
+        # 8: No threshold (final)
+
+        node_labels = [
+            f"All animals<br>n = {n_total}",
+            f"Nonlinear (Davies p<0.05)<br>n = {n_davies_sig}"
+            f"<br><i>Pscore: {n_pscore_sig}/{n_total}</i>",
+            f"Linear (no breakpoint)<br>n = {n_davies_ns}",
+            f"Broken-stick converged<br>n = {n_bs_conv}",
+            f"Broken-stick failed<br>n = {n_bs_fail}",
+            f"Hill onset found<br>n = {n_hill_ok}",
+            f"Hill failed<br>n = {n_hill_fail}",
+            f"Threshold identified<br>n = {n_threshold}",
+            f"No threshold<br>n = {n_no_threshold}",
+        ]
+
+        # Wong palette as rgba
+        node_colors = [
+            "rgba(86, 180, 233, 0.9)",   # 0 sky blue (total)
+            "rgba(0, 114, 178, 0.9)",     # 1 blue (Davies sig)
+            "rgba(153, 153, 153, 0.9)",   # 2 grey (linear)
+            "rgba(0, 114, 178, 0.9)",     # 3 blue (BS ok)
+            "rgba(230, 159, 0, 0.9)",     # 4 amber (BS fail)
+            "rgba(213, 94, 0, 0.9)",      # 5 vermilion (Hill ok)
+            "rgba(204, 121, 167, 0.9)",   # 6 purple (Hill fail)
+            "rgba(0, 158, 115, 0.9)",     # 7 green (threshold)
+            "rgba(153, 153, 153, 0.9)",   # 8 grey (no threshold)
+        ]
+
+        # ── Link definitions (source → target, value) ────────
+        links_source = []
+        links_target = []
+        links_value = []
+        links_color = []
+
+        def add_link(src, tgt, val, color):
+            if val > 0:
+                links_source.append(src)
+                links_target.append(tgt)
+                links_value.append(val)
+                links_color.append(color)
+
+        # Total → Davies sig / n.s.
+        add_link(0, 1, n_davies_sig, "rgba(0, 114, 178, 0.25)")
+        add_link(0, 2, n_davies_ns,  "rgba(153, 153, 153, 0.25)")
+
+        # Davies sig → BS converged / failed
+        add_link(1, 3, n_bs_conv, "rgba(0, 114, 178, 0.25)")
+        add_link(1, 4, n_bs_fail, "rgba(230, 159, 0, 0.25)")
+
+        # BS failed → Hill ok / fail
+        add_link(4, 5, n_hill_ok,   "rgba(213, 94, 0, 0.25)")
+        add_link(4, 6, n_hill_fail, "rgba(204, 121, 167, 0.25)")
+
+        # → Final: threshold identified
+        add_link(3, 7, n_bs_conv, "rgba(0, 158, 115, 0.25)")
+        add_link(5, 7, n_hill_ok, "rgba(0, 158, 115, 0.25)")
+
+        # → Final: no threshold
+        add_link(2, 8, n_davies_ns,  "rgba(153, 153, 153, 0.20)")
+        add_link(6, 8, n_hill_fail,  "rgba(153, 153, 153, 0.20)")
+
+        fig = go.Figure(data=[go.Sankey(
+            arrangement="snap",
+            node=dict(
+                pad=25,
+                thickness=30,
+                line=dict(color="#333333", width=1),
+                label=node_labels,
+                color=node_colors,
+            ),
+            link=dict(
+                source=links_source,
+                target=links_target,
+                value=links_value,
+                color=links_color,
+            ),
+        )])
+
+        fig.update_layout(
+            title=dict(
+                text=title,
+                font=dict(size=16, family="Arial"),
+                x=0.5,
+            ),
+            font=dict(size=12, family="Arial"),
+            width=1000,
+            height=500,
+            margin=dict(l=20, r=20, t=60, b=20),
+        )
+
+        # Save as SVG, PNG, and interactive HTML
+        try:
+            fig.write_image(str(out_dir / f"sankey_{prefix}.svg"))
+            fig.write_image(str(out_dir / f"sankey_{prefix}.png"), scale=2)
+        except Exception as e:
+            log.warning("Could not export sankey image (kaleido?): %s", e)
+        fig.write_html(str(out_dir / f"sankey_{prefix}.html"),
+                        include_plotlyjs="cdn")
+
+
+# ─────────────────────────────────────────────────────────────
 #  « main »
 # ─────────────────────────────────────────────────────────────
 
@@ -670,6 +849,7 @@ def main() -> None:
     plot_thi_vs_temp_scatter(bs, d)
     plot_bodytemp_vs_resp_scatter(bs, d)
     plot_examples(rumen, resp, bs, d)
+    plot_threshold_sankey(bs, d)
 
     log.info("All figures saved to %s", d)
 
