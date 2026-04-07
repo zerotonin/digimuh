@@ -362,6 +362,122 @@ def pscore_test(
 
 
 # ─────────────────────────────────────────────────────────────
+#  « four-parameter logistic (Hill) fit »
+# ─────────────────────────────────────────────────────────────
+
+def hill_fit(
+    x: np.ndarray, y: np.ndarray,
+    x_range: tuple[float, float] | None = None,
+) -> dict:
+    """Fit a four-parameter logistic (Hill) dose-response model.
+
+    Model::
+
+        y = y_min + (y_max - y_min) / (1 + (EC50 / x)^n)
+
+    The EC50 is the predictor value at half-maximal response.  The Hill
+    coefficient *n* captures steepness: large *n* = sharp switch (like
+    rumen temperature), small *n* = gradual transition (like respiration).
+
+    In addition to EC50, we compute the **lower bend point** following
+    Sebaugh & McCray (2003, Pharmaceutical Statistics 2:167-174).  This
+    is the x-value where the second derivative of the Hill curve equals
+    zero on the lower side, marking the transition from the baseline
+    plateau into the rising phase::
+
+        x_bend_lower = EC50 * ((n - 1) / (n + 1))^(1/n)    for n > 1
+
+    This is the onset of the nonlinear rise and is directly comparable
+    to the broken-stick breakpoint.
+
+    Args:
+        x: Predictor (THI or barn temperature).
+        y: Response (body temp or respiration rate).
+        x_range: Plausible range for EC50 initial guess.
+
+    Returns:
+        Dict with ec50, hill_n, y_min, y_max, lower_bend, r_squared,
+        aic, converged.
+
+    References:
+        Sebaugh JL, McCray PD (2003) Defining the linear portion of a
+        sigmoid-shaped curve: bend points. Pharm Stat 2:167-174.
+    """
+    from scipy.optimize import curve_fit
+
+    mask = np.isfinite(x) & np.isfinite(y)
+    x, y = x[mask], y[mask]
+    n = len(x)
+    if n < 30:
+        return {"ec50": np.nan, "converged": False, "n": n}
+
+    if x_range is None:
+        x_range = (np.percentile(x, 10), np.percentile(x, 90))
+
+    def hill_func(xv, y_min, y_max, ec50, hill_n):
+        """Four-parameter logistic (Hill equation)."""
+        ratio = np.clip(ec50 / np.maximum(xv, 1e-10), 1e-10, 1e10)
+        return y_min + (y_max - y_min) / (1.0 + np.power(ratio, hill_n))
+
+    # Initial guesses from data quantiles
+    y_lo = np.percentile(y, 10)
+    y_hi = np.percentile(y, 90)
+    ec50_init = np.mean(x_range)
+
+    # Bounds to keep parameters physiologically plausible
+    bounds_lo = [np.min(y) - 5, np.median(y), x_range[0] * 0.5, 0.5]
+    bounds_hi = [np.median(y), np.max(y) + 5, x_range[1] * 1.5, 30.0]
+
+    try:
+        popt, pcov = curve_fit(
+            hill_func, x, y,
+            p0=[y_lo, y_hi, ec50_init, 2.0],
+            bounds=(bounds_lo, bounds_hi),
+            maxfev=10000,
+        )
+    except (RuntimeError, ValueError):
+        return {"ec50": np.nan, "converged": False, "n": n}
+
+    y_min_fit, y_max_fit, ec50, hill_n = popt
+
+    # Goodness of fit
+    y_pred = hill_func(x, *popt)
+    ss_res = np.sum((y - y_pred) ** 2)
+    ss_tot = np.sum((y - np.mean(y)) ** 2)
+    r_sq = 1.0 - ss_res / ss_tot if ss_tot > 0 else np.nan
+
+    # AIC (4 parameters + sigma)
+    k_params = 5
+    aic = n * np.log(ss_res / n) + 2 * k_params if n > k_params else np.nan
+
+    # Lower bend point (Sebaugh & McCray 2003)
+    # x_bend = EC50 * ((n-1)/(n+1))^(1/n)  for n > 1
+    if hill_n > 1.0:
+        lower_bend = ec50 * ((hill_n - 1.0) / (hill_n + 1.0)) ** (1.0 / hill_n)
+    else:
+        # For n <= 1 the curve has no inflection in the lower portion;
+        # fall back to EC10 as a conventional onset marker
+        lower_bend = ec50 * (0.10 / 0.90) ** (1.0 / hill_n)
+
+    # Sanity: bend point should be within or near the data range
+    x_lo, x_hi = np.min(x), np.max(x)
+    plausible = (x_lo - 10) <= lower_bend <= x_hi
+
+    return {
+        "ec50": ec50,
+        "hill_n": hill_n,
+        "y_min": y_min_fit,
+        "y_max": y_max_fit,
+        "lower_bend": lower_bend if plausible else np.nan,
+        "r_squared": r_sq,
+        "aic": aic,
+        "n": n,
+        "converged": True,
+        "bend_plausible": plausible,
+    }
+
+
+# ─────────────────────────────────────────────────────────────
 #  « Benjamini-Hochberg FDR »
 # ─────────────────────────────────────────────────────────────
 
@@ -472,6 +588,12 @@ def run_broken_stick_fits(
         temp_pscore = pscore_test(
             grp["barn_temp"].values, grp["body_temp"].values, x_range=(5, 35))
 
+        # Hill / logistic fits (body temp)
+        thi_hill = hill_fit(
+            grp["barn_thi"].values, grp["body_temp"].values, x_range=(45, 80))
+        temp_hill = hill_fit(
+            grp["barn_temp"].values, grp["body_temp"].values, x_range=(5, 35))
+
         # Respiration fits
         resp_grp = resp[
             (resp["animal_id"] == aid) & (resp["year"] == year)
@@ -498,12 +620,23 @@ def run_broken_stick_fits(
             resp_temp_pscore = pscore_test(
                 resp_grp["barn_temp"].values, resp_grp["resp_rate"].values,
                 x_range=(5, 35))
+            # Hill / logistic fits (respiration)
+            resp_thi_hill = hill_fit(
+                resp_grp["barn_thi"].values, resp_grp["resp_rate"].values,
+                x_range=(45, 80))
+            resp_temp_hill = hill_fit(
+                resp_grp["barn_temp"].values, resp_grp["resp_rate"].values,
+                x_range=(5, 35))
         else:
             resp_thi_fit = {"breakpoint": np.nan, "converged": False, "n": 0}
             resp_temp_fit = {"breakpoint": np.nan, "converged": False, "n": 0}
             _empty_test = {"p_value": np.nan}
             resp_thi_davies = resp_thi_pscore = _empty_test
             resp_temp_davies = resp_temp_pscore = _empty_test
+            _empty_hill = {"ec50": np.nan, "hill_n": np.nan,
+                           "lower_bend": np.nan, "r_squared": np.nan,
+                           "aic": np.nan, "converged": False}
+            resp_thi_hill = resp_temp_hill = _empty_hill
 
         rec = {
             "animal_id": aid, "year": int(year), "date_enter": enter,
@@ -517,6 +650,11 @@ def run_broken_stick_fits(
             "thi_converged": thi_fit["converged"],
             "thi_davies_p": thi_davies["p_value"],
             "thi_pscore_p": thi_pscore["p_value"],
+            "thi_hill_ec50": thi_hill.get("ec50"),
+            "thi_hill_n": thi_hill.get("hill_n"),
+            "thi_hill_bend": thi_hill.get("lower_bend"),
+            "thi_hill_r2": thi_hill.get("r_squared"),
+            "thi_hill_converged": thi_hill.get("converged", False),
             # Body temp vs barn temp
             "temp_breakpoint": temp_fit["breakpoint"],
             "temp_slope_below": temp_fit.get("slope_below"),
@@ -525,6 +663,11 @@ def run_broken_stick_fits(
             "temp_converged": temp_fit["converged"],
             "temp_davies_p": temp_davies["p_value"],
             "temp_pscore_p": temp_pscore["p_value"],
+            "temp_hill_ec50": temp_hill.get("ec50"),
+            "temp_hill_n": temp_hill.get("hill_n"),
+            "temp_hill_bend": temp_hill.get("lower_bend"),
+            "temp_hill_r2": temp_hill.get("r_squared"),
+            "temp_hill_converged": temp_hill.get("converged", False),
             # Resp vs THI
             "resp_thi_breakpoint": resp_thi_fit["breakpoint"],
             "resp_thi_slope_below": resp_thi_fit.get("slope_below"),
@@ -533,12 +676,22 @@ def run_broken_stick_fits(
             "resp_thi_converged": resp_thi_fit.get("converged", False),
             "resp_thi_davies_p": resp_thi_davies["p_value"],
             "resp_thi_pscore_p": resp_thi_pscore["p_value"],
+            "resp_thi_hill_ec50": resp_thi_hill.get("ec50"),
+            "resp_thi_hill_n": resp_thi_hill.get("hill_n"),
+            "resp_thi_hill_bend": resp_thi_hill.get("lower_bend"),
+            "resp_thi_hill_r2": resp_thi_hill.get("r_squared"),
+            "resp_thi_hill_converged": resp_thi_hill.get("converged", False),
             # Resp vs barn temp
             "resp_temp_breakpoint": resp_temp_fit["breakpoint"],
             "resp_temp_r_squared": resp_temp_fit.get("r_squared"),
             "resp_temp_converged": resp_temp_fit.get("converged", False),
             "resp_temp_davies_p": resp_temp_davies["p_value"],
             "resp_temp_pscore_p": resp_temp_pscore["p_value"],
+            "resp_temp_hill_ec50": resp_temp_hill.get("ec50"),
+            "resp_temp_hill_n": resp_temp_hill.get("hill_n"),
+            "resp_temp_hill_bend": resp_temp_hill.get("lower_bend"),
+            "resp_temp_hill_r2": resp_temp_hill.get("r_squared"),
+            "resp_temp_hill_converged": resp_temp_hill.get("converged", False),
         }
         results.append(rec)
 
@@ -829,6 +982,30 @@ def main() -> None:
             label, n_davies_sig, n_valid, 100 * n_davies_sig / n_valid,
             n_pscore_sig, n_valid, 100 * n_pscore_sig / n_valid,
         )
+
+    # Hill fit summary
+    log.info("─" * 50)
+    log.info("  Hill (4PL) fits — lower bend point (Sebaugh & McCray 2003):")
+    for prefix, label in [("thi", "THI→body"), ("temp", "Temp→body"),
+                          ("resp_thi", "THI→resp"), ("resp_temp", "Temp→resp")]:
+        hill_conv_col = f"{prefix}_hill_converged"
+        hill_bend_col = f"{prefix}_hill_bend"
+        if hill_conv_col not in bs.columns:
+            continue
+        n_hill_conv = (bs[hill_conv_col] == True).sum()
+        bends = bs.loc[bs[hill_conv_col] == True, hill_bend_col].dropna()
+        n_bend_valid = len(bends)
+        if n_bend_valid > 0:
+            log.info(
+                "  %s: converged %d/%d (%.0f%%), bend valid %d, "
+                "median bend=%.1f [IQR %.1f–%.1f]",
+                label, n_hill_conv, len(bs), 100 * n_hill_conv / len(bs),
+                n_bend_valid, bends.median(), bends.quantile(0.25),
+                bends.quantile(0.75),
+            )
+        else:
+            log.info("  %s: converged %d/%d (%.0f%%), no valid bend points",
+                     label, n_hill_conv, len(bs), 100 * n_hill_conv / len(bs))
 
     # 2. Spearman correlations
     log.info("═" * 50)
