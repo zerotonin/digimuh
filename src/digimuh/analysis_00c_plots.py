@@ -827,89 +827,100 @@ def plot_cross_correlation(out_dir: Path) -> None:
                     ha="center", va="bottom", fontsize=8,
                     color=colour, fontstyle="italic")
 
-    # Plot both cross-correlation and cross-covariance
-    for metric, metric_label, ylab, fname_suffix in [
-        ("xcorr", "Cross-correlation", "Cross-correlation (r)", "xcorr"),
-        ("xcov", "Cross-covariance", "Cross-covariance", "xcov"),
-    ]:
-        # ── Separate panels per region ────────────────────────
-        for pred, pred_label in [("thi", "Barn THI"), ("temp", "Barn temperature")]:
-            sub = xcorr[xcorr["predictor"] == pred]
-            if sub.empty:
-                continue
+    # Detect whether we have the variant column (raw vs detrended)
+    has_variants = "variant" in xcorr.columns
+    variants = [("raw", ""), ("detrended", " (diurnal removed)")] if has_variants else [("raw", "")]
 
-            fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
+    for variant, variant_subtitle in variants:
+        vdata = xcorr[xcorr["variant"] == variant] if has_variants else xcorr
+        if vdata.empty:
+            continue
 
-            for ax, (region, colour, label) in zip(axes, [
-                ("below", COLOURS["below_bp"], "Below breakpoint"),
-                ("above", COLOURS["above_bp"], "Above breakpoint"),
-            ]):
-                rsub = sub[sub["region"] == region]
-                if rsub.empty:
+        variant_suffix = f"_{variant}" if variant != "raw" else ""
+
+        # Plot both cross-correlation and cross-covariance
+        for metric, metric_label, ylab, fname_suffix in [
+            ("xcorr", "Cross-correlation", "Cross-correlation (r)", "xcorr"),
+            ("xcov", "Cross-covariance", "Cross-covariance", "xcov"),
+        ]:
+            # ── Separate panels per region ────────────────────
+            for pred, pred_label in [("thi", "Barn THI"), ("temp", "Barn temperature")]:
+                sub = vdata[vdata["predictor"] == pred]
+                if sub.empty:
                     continue
 
-                agg = rsub.groupby("lag_minutes")[metric].agg(["mean", "std", "count"])
-                agg["sem"] = agg["std"] / np.sqrt(agg["count"])
+                fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
 
-                ax.fill_between(agg.index, agg["mean"] - agg["sem"],
-                               agg["mean"] + agg["sem"],
-                               alpha=0.2, color=colour, label="SEM")
-                ax.plot(agg.index, agg["mean"], color=colour, linewidth=2)
+                for ax, (region, colour, label) in zip(axes, [
+                    ("below", COLOURS["below_bp"], "Below breakpoint"),
+                    ("above", COLOURS["above_bp"], "Above breakpoint"),
+                ]):
+                    rsub = sub[sub["region"] == region]
+                    if rsub.empty:
+                        continue
+
+                    agg = rsub.groupby("lag_minutes")[metric].agg(["mean", "std", "count"])
+                    agg["sem"] = agg["std"] / np.sqrt(agg["count"])
+
+                    ax.fill_between(agg.index, agg["mean"] - agg["sem"],
+                                   agg["mean"] + agg["sem"],
+                                   alpha=0.2, color=colour, label="SEM")
+                    ax.plot(agg.index, agg["mean"], color=colour, linewidth=2)
+                    ax.axhline(0, color="#999", linewidth=0.5, linestyle="--")
+                    ax.axvline(0, color="#999", linewidth=1, linestyle="--",
+                               label="Climate change")
+
+                    _annotate_peak(ax, agg, colour)
+
+                    ax.set_xlabel("Lag (minutes)")
+                    ax.set_ylabel(ylab)
+                    ax.set_title(f"{label}\n(n={rsub['animal_id'].nunique()} animals)")
+
+                fig.suptitle(
+                    f"{metric_label}: {pred_label} vs rumen temperature{variant_subtitle}\n"
+                    f"(shaded: ± 1 SEM across animals)",
+                    fontsize=13, fontweight="bold")
+                fig.tight_layout()
+                _save(fig, f"{fname_suffix}_{pred}{variant_suffix}", out_dir)
+
+            # ── Overlay: below vs above on same axes ─────────
+            for pred, pred_label in [("thi", "Barn THI"), ("temp", "Barn temperature")]:
+                sub = vdata[vdata["predictor"] == pred]
+                if sub.empty:
+                    continue
+
+                fig, ax = plt.subplots(figsize=(10, 6))
+                y_offsets = {"below": 0.05, "above": 0.12}
+
+                for region, colour, label in [
+                    ("below", COLOURS["below_bp"], "Below breakpoint"),
+                    ("above", COLOURS["above_bp"], "Above breakpoint"),
+                ]:
+                    rsub = sub[sub["region"] == region]
+                    if rsub.empty:
+                        continue
+                    agg = rsub.groupby("lag_minutes")[metric].agg(["mean", "std", "count"])
+                    agg["sem"] = agg["std"] / np.sqrt(agg["count"])
+
+                    ax.fill_between(agg.index, agg["mean"] - agg["sem"],
+                                   agg["mean"] + agg["sem"],
+                                   alpha=0.15, color=colour)
+                    ax.plot(agg.index, agg["mean"], color=colour, linewidth=2,
+                            label=label)
+
+                    _annotate_peak(ax, agg, colour, y_offset_frac=y_offsets[region])
+
                 ax.axhline(0, color="#999", linewidth=0.5, linestyle="--")
                 ax.axvline(0, color="#999", linewidth=1, linestyle="--",
                            label="Climate change")
-
-                _annotate_peak(ax, agg, colour)
-
                 ax.set_xlabel("Lag (minutes)")
                 ax.set_ylabel(ylab)
-                ax.set_title(f"{label}\n(n={rsub['animal_id'].nunique()} animals)")
-
-            fig.suptitle(
-                f"{metric_label}: {pred_label} vs rumen temperature\n"
-                f"(shaded: ± 1 SEM across animals)",
-                fontsize=13, fontweight="bold")
-            fig.tight_layout()
-            _save(fig, f"{fname_suffix}_{pred}", out_dir)
-
-        # ── Overlay: below vs above on same axes ─────────────
-        for pred, pred_label in [("thi", "Barn THI"), ("temp", "Barn temperature")]:
-            sub = xcorr[xcorr["predictor"] == pred]
-            if sub.empty:
-                continue
-
-            fig, ax = plt.subplots(figsize=(10, 6))
-            y_offsets = {"below": 0.05, "above": 0.12}
-
-            for region, colour, label in [
-                ("below", COLOURS["below_bp"], "Below breakpoint"),
-                ("above", COLOURS["above_bp"], "Above breakpoint"),
-            ]:
-                rsub = sub[sub["region"] == region]
-                if rsub.empty:
-                    continue
-                agg = rsub.groupby("lag_minutes")[metric].agg(["mean", "std", "count"])
-                agg["sem"] = agg["std"] / np.sqrt(agg["count"])
-
-                ax.fill_between(agg.index, agg["mean"] - agg["sem"],
-                               agg["mean"] + agg["sem"],
-                               alpha=0.15, color=colour)
-                ax.plot(agg.index, agg["mean"], color=colour, linewidth=2,
-                        label=label)
-
-                _annotate_peak(ax, agg, colour, y_offset_frac=y_offsets[region])
-
-            ax.axhline(0, color="#999", linewidth=0.5, linestyle="--")
-            ax.axvline(0, color="#999", linewidth=1, linestyle="--",
-                       label="Climate change")
-            ax.set_xlabel("Lag (minutes)")
-            ax.set_ylabel(ylab)
-            ax.set_title(
-                f"{metric_label}: {pred_label} vs rumen temperature\n"
-                f"(shaded: ± 1 SEM)")
-            ax.legend()
-            fig.tight_layout()
-            _save(fig, f"{fname_suffix}_{pred}_overlay", out_dir)
+                ax.set_title(
+                    f"{metric_label}: {pred_label} vs rumen temperature{variant_subtitle}\n"
+                    f"(shaded: ± 1 SEM)")
+                ax.legend()
+                fig.tight_layout()
+                _save(fig, f"{fname_suffix}_{pred}_overlay{variant_suffix}", out_dir)
 
 
 # ─────────────────────────────────────────────────────────────
