@@ -1073,6 +1073,121 @@ def make_summary_table(bs: pd.DataFrame) -> pd.DataFrame:
 
 
 # ─────────────────────────────────────────────────────────────
+#  « thermoneutral fraction vs milk yield »
+# ─────────────────────────────────────────────────────────────
+
+def compute_thermoneutral_fraction(
+    rumen: pd.DataFrame, bs_results: pd.DataFrame,
+) -> pd.DataFrame:
+    """Compute daily thermoneutral fraction (TNF) per animal.
+
+    For each animal with a converged THI breakpoint, count the fraction
+    of 10-min readings per calendar day where barn THI is at or below
+    the individual breakpoint.  This is the fraction of the day the
+    animal spends within its thermoneutral zone.
+
+    Also computes analogous fraction for barn temperature breakpoints.
+
+    Args:
+        rumen: rumen_barn.csv DataFrame (needs timestamp, barn_thi, barn_temp).
+        bs_results: broken_stick_results.csv DataFrame.
+
+    Returns:
+        DataFrame with columns: animal_id, year, date, thi_tnf, temp_tnf,
+        n_readings, mean_thi, mean_body_temp.
+    """
+    records = []
+    converged = bs_results[bs_results["thi_converged"] == True]
+
+    for _, row in converged.iterrows():
+        aid = int(row["animal_id"])
+        year = int(row["year"])
+        thi_bp = row["thi_breakpoint"]
+
+        # Barn temp breakpoint (may not converge)
+        temp_bp = row.get("temp_breakpoint", np.nan)
+        temp_conv = row.get("temp_converged", False)
+
+        grp = rumen[(rumen["animal_id"] == aid) & (rumen["year"] == year)].copy()
+        if len(grp) < 50:
+            continue
+
+        grp["date"] = pd.to_datetime(grp["timestamp"]).dt.date
+
+        for date, day_data in grp.groupby("date"):
+            n = len(day_data)
+            if n < 6:  # at least 1 hour of data
+                continue
+
+            thi_tnf = (day_data["barn_thi"] <= thi_bp).mean()
+            temp_tnf = (day_data["barn_temp"] <= temp_bp).mean() if temp_conv else np.nan
+
+            records.append({
+                "animal_id": aid,
+                "year": year,
+                "date": date,
+                "thi_tnf": thi_tnf,
+                "temp_tnf": temp_tnf,
+                "n_readings": n,
+                "mean_thi": day_data["barn_thi"].mean(),
+                "mean_body_temp": day_data["body_temp"].mean(),
+            })
+
+    return pd.DataFrame(records)
+
+
+def compute_tnf_yield_analysis(
+    tnf: pd.DataFrame, bs_results: pd.DataFrame,
+) -> pd.DataFrame:
+    """Correlate thermoneutral fraction with normalised milk yield.
+
+    Per-animal summary: mean TNF across days, milk yield normalised
+    to P95 of that animal's yield across years (robust reference max).
+
+    For single-year animals the P95 equals the mean, so relative_yield
+    is 1.0.  These are included in the absolute analysis but excluded
+    from the relative analysis.
+
+    Args:
+        tnf: Daily TNF DataFrame from compute_thermoneutral_fraction.
+        bs_results: broken_stick_results with mean_milk_yield_kg.
+
+    Returns:
+        DataFrame: one row per animal-year with mean_tnf, yield, P95,
+        relative_yield.
+    """
+    # Mean TNF per animal-year
+    tnf_summary = tnf.groupby(["animal_id", "year"]).agg(
+        mean_thi_tnf=("thi_tnf", "mean"),
+        median_thi_tnf=("thi_tnf", "median"),
+        mean_temp_tnf=("temp_tnf", "mean"),
+        n_days=("date", "nunique"),
+    ).reset_index()
+
+    # Merge with milk yield
+    yield_cols = ["animal_id", "year", "mean_milk_yield_kg"]
+    if "lactation_nr" in bs_results.columns:
+        yield_cols.append("lactation_nr")
+    merged = tnf_summary.merge(
+        bs_results[yield_cols].drop_duplicates(),
+        on=["animal_id", "year"], how="left",
+    )
+
+    # P95 reference yield per animal (robust max across years)
+    # For animals with 1 year: P95 = their value → relative = 1.0
+    yield_ref = bs_results.groupby("animal_id")["mean_milk_yield_kg"].agg(
+        yield_p95=lambda x: np.nanpercentile(x.dropna(), 95) if len(x.dropna()) > 1
+                   else x.dropna().iloc[0] if len(x.dropna()) == 1 else np.nan,
+        n_years=lambda x: x.notna().sum(),
+    ).reset_index()
+
+    merged = merged.merge(yield_ref, on="animal_id", how="left")
+    merged["relative_yield"] = merged["mean_milk_yield_kg"] / merged["yield_p95"]
+
+    return merged
+
+
+# ─────────────────────────────────────────────────────────────
 #  « main »
 # ─────────────────────────────────────────────────────────────
 
@@ -1293,7 +1408,52 @@ def main() -> None:
             xcorr_rows,
         )
 
-    # ── 6. Stability ─────────────────────────────────────────
+    # ── 7. Thermoneutral fraction vs milk yield ──────────────
+    section("Thermoneutral fraction (TNF)",
+            "Daily fraction below individual breakpoint vs milk yield")
+    tnf = compute_thermoneutral_fraction(rumen, bs)
+    tnf.to_csv(d / "thermoneutral_fraction.csv", index=False)
+    kv("Daily TNF records", len(tnf))
+    kv("Animals with TNF", tnf["animal_id"].nunique() if not tnf.empty else 0)
+
+    if not tnf.empty:
+        tnf_yield = compute_tnf_yield_analysis(tnf, bs)
+        tnf_yield.to_csv(d / "tnf_yield.csv", index=False)
+
+        # Spearman: TNF vs absolute yield
+        valid = tnf_yield.dropna(subset=["mean_thi_tnf", "mean_milk_yield_kg"])
+        if len(valid) >= 10:
+            rs, p = spearmanr(valid["mean_thi_tnf"], valid["mean_milk_yield_kg"])
+            kv("THI TNF vs yield: Spearman rs", f"{rs:.3f} (p={p:.4f})")
+
+        # Spearman: TNF vs relative yield (multi-year animals only)
+        multi = tnf_yield[tnf_yield["n_years"] > 1].dropna(
+            subset=["mean_thi_tnf", "relative_yield"])
+        if len(multi) >= 10:
+            rs_rel, p_rel = spearmanr(multi["mean_thi_tnf"], multi["relative_yield"])
+            kv("THI TNF vs relative yield (multi-year)", f"{rs_rel:.3f} (p={p_rel:.4f})")
+            kv("  n multi-year animal-years", len(multi))
+
+        # Summary table: TNF quartiles vs yield
+        if len(valid) >= 20:
+            valid = valid.copy()
+            valid["tnf_quartile"] = pd.qcut(valid["mean_thi_tnf"], 4,
+                                            labels=["Q1 (low TNF)", "Q2", "Q3", "Q4 (high TNF)"])
+            q_rows = []
+            for q in ["Q1 (low TNF)", "Q2", "Q3", "Q4 (high TNF)"]:
+                qdata = valid[valid["tnf_quartile"] == q]
+                q_rows.append([
+                    q, len(qdata),
+                    f"{qdata['mean_thi_tnf'].median():.2f}",
+                    f"{qdata['mean_milk_yield_kg'].median():.1f}",
+                ])
+            result_table(
+                "Milk yield by thermoneutral fraction quartile",
+                ["Quartile", "n", "Median TNF", "Median yield (kg)"],
+                q_rows,
+            )
+
+    # ── 8. Stability ─────────────────────────────────────────
     section("Breakpoint stability", "Repeat animals across years")
     pairs, icc = compute_stability(bs)
     if not pairs.empty:
