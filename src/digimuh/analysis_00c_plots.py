@@ -1058,14 +1058,9 @@ def plot_event_triggered_average(out_dir: Path) -> None:
         ax.set_title(f"(A) {climate_label}\n(n={n_events} events, {n_animals} animals)")
         ax.legend(fontsize=8)
 
-        # ── Panel B: Rumen temp centered on animal mean ──────
+        # ── Panel B: Raw rumen temperature ──────────────────
         ax = axes[1]
-        col_centered = "body_temp_centered"
-        if col_centered not in sub.columns:
-            # Fallback: use raw body_temp
-            col_centered = "body_temp"
-
-        agg_raw = sub.groupby("relative_minutes")[col_centered].agg(
+        agg_raw = sub.groupby("relative_minutes")["body_temp"].agg(
             ["mean", "std", "count"])
         agg_raw["sem"] = agg_raw["std"] / np.sqrt(agg_raw["count"])
 
@@ -1075,10 +1070,9 @@ def plot_event_triggered_average(out_dir: Path) -> None:
         ax.plot(agg_raw.index, agg_raw["mean"], color=COLOURS["below_bp"], linewidth=2)
         ax.axvline(0, color="#333", linewidth=1.5, linestyle="--",
                    label="Breakpoint crossing")
-        ax.axhline(0, color="#999", linewidth=0.5, linestyle="--")
         ax.set_xlabel("Time relative to crossing (minutes)")
-        ax.set_ylabel("Rumen temp relative to animal mean (°C)")
-        ax.set_title("(B) Rumen temperature\n(centered on animal mean)")
+        ax.set_ylabel("Rumen temperature (°C)")
+        ax.set_title("(B) Rumen temperature")
         ax.legend(fontsize=8)
 
         # ── Panel C: Rumen temp baseline-subtracted ──────────
