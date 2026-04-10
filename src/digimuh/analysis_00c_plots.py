@@ -910,6 +910,84 @@ def plot_cross_correlation(out_dir: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────
+#  « thermoneutral fraction vs milk yield »
+# ─────────────────────────────────────────────────────────────
+
+def plot_tnf_yield(out_dir: Path) -> None:
+    """Scatter plots: thermoneutral fraction vs milk yield."""
+    import matplotlib.pyplot as plt
+    from scipy.stats import spearmanr
+    _setup()
+
+    tnf_path = out_dir / "tnf_yield.csv"
+    if not tnf_path.exists():
+        log.info("  tnf_yield.csv not found, skipping TNF plots")
+        return
+
+    df = pd.read_csv(tnf_path)
+    if df.empty:
+        return
+
+    valid = df.dropna(subset=["mean_thi_tnf", "mean_milk_yield_kg"])
+    if len(valid) < 10:
+        log.info("  Too few animals for TNF vs yield plot (%d)", len(valid))
+        return
+
+    log.info("  Plotting TNF vs yield (%d animal-years) …", len(valid))
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    # Panel A: TNF vs absolute yield
+    ax = axes[0]
+    for year in sorted(valid["year"].unique().astype(int)):
+        sub = valid[valid["year"] == year]
+        ax.scatter(sub["mean_thi_tnf"], sub["mean_milk_yield_kg"],
+                   s=20, alpha=0.6, label=str(year),
+                   color=COLOURS["year"].get(year, "#888"))
+
+    rs, p = spearmanr(valid["mean_thi_tnf"], valid["mean_milk_yield_kg"])
+    # Regression line
+    z = np.polyfit(valid["mean_thi_tnf"], valid["mean_milk_yield_kg"], 1)
+    xl = np.linspace(valid["mean_thi_tnf"].min(), valid["mean_thi_tnf"].max(), 50)
+    ax.plot(xl, np.polyval(z, xl), "--", color=COLOURS["fit_line"], linewidth=1.5)
+
+    ax.set_xlabel("Mean thermoneutral fraction (TNF)")
+    ax.set_ylabel("Mean milk yield (kg/milking)")
+    ax.set_title(f"TNF vs milk yield\nSpearman rs = {rs:.3f}, p = {p:.4f}, n = {len(valid)}")
+    ax.legend(fontsize=8, title="Year")
+
+    # Panel B: TNF vs relative yield (multi-year animals)
+    ax = axes[1]
+    multi = df[df["n_years"] > 1].dropna(subset=["mean_thi_tnf", "relative_yield"])
+    if len(multi) >= 10:
+        for year in sorted(multi["year"].unique().astype(int)):
+            sub = multi[multi["year"] == year]
+            ax.scatter(sub["mean_thi_tnf"], sub["relative_yield"],
+                       s=20, alpha=0.6, label=str(year),
+                       color=COLOURS["year"].get(year, "#888"))
+
+        rs_rel, p_rel = spearmanr(multi["mean_thi_tnf"], multi["relative_yield"])
+        z = np.polyfit(multi["mean_thi_tnf"], multi["relative_yield"], 1)
+        xl = np.linspace(multi["mean_thi_tnf"].min(), multi["mean_thi_tnf"].max(), 50)
+        ax.plot(xl, np.polyval(z, xl), "--", color=COLOURS["fit_line"], linewidth=1.5)
+        ax.axhline(1.0, color="#999", linestyle=":", linewidth=0.8, label="Reference (P95)")
+
+        ax.set_xlabel("Mean thermoneutral fraction (TNF)")
+        ax.set_ylabel("Relative milk yield (yield / P95)")
+        ax.set_title(f"TNF vs relative yield (multi-year)\n"
+                     f"Spearman rs = {rs_rel:.3f}, p = {p_rel:.4f}, n = {len(multi)}")
+        ax.legend(fontsize=8, title="Year")
+    else:
+        ax.text(0.5, 0.5, f"Too few multi-year animals (n={len(multi)})",
+                transform=ax.transAxes, ha="center")
+        ax.set_title("TNF vs relative yield (multi-year)")
+
+    fig.suptitle("Thermoneutral fraction vs milk yield", fontsize=13, fontweight="bold")
+    fig.tight_layout()
+    _save(fig, "tnf_yield", out_dir)
+
+
+# ─────────────────────────────────────────────────────────────
 #  « longitudinal breakpoint tracking (repeat animals) »
 # ─────────────────────────────────────────────────────────────
 
@@ -1224,14 +1302,10 @@ def plot_threshold_sankey(bs: pd.DataFrame, out_dir: Path) -> None:
             margin=dict(l=20, r=20, t=60, b=20),
         )
 
-        # Save as SVG, PNG, and interactive HTML
-        try:
-            fig.write_image(str(out_dir / f"sankey_{prefix}.svg"))
-            fig.write_image(str(out_dir / f"sankey_{prefix}.png"), scale=2)
-        except Exception as e:
-            log.warning("Could not export sankey image (kaleido?): %s", e)
+        # Save as interactive HTML (skip SVG/PNG: kaleido+chromium hangs)
         fig.write_html(str(out_dir / f"sankey_{prefix}.html"),
                         include_plotlyjs="cdn")
+        log.info("  Saved sankey_%s.html", prefix)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1286,6 +1360,7 @@ def main() -> None:
         ("Body temp vs resp scatter", lambda: plot_bodytemp_vs_resp_scatter(bs, d)),
         ("Diagnostic examples", lambda: plot_examples(rumen, resp, bs, d)),
         ("Cross-correlation", lambda: plot_cross_correlation(d)),
+        ("TNF vs yield", lambda: plot_tnf_yield(d)),
         ("Longitudinal breakpoints", lambda: plot_longitudinal_breakpoints(bs, d)),
         ("Sankey diagrams", lambda: plot_threshold_sankey(bs, d)),
     ]
