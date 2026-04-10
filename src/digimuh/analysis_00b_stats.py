@@ -31,7 +31,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize_scalar
-from scipy.stats import spearmanr, wilcoxon
+from scipy.stats import spearmanr
 
 log = logging.getLogger("digimuh.stats")
 
@@ -785,15 +785,17 @@ def compute_below_above(
 
 
 # ─────────────────────────────────────────────────────────────
-#  « within-year Wilcoxon tests with BH-FDR »
+#  « within-year Fisher resampling tests with BH-FDR »
 # ─────────────────────────────────────────────────────────────
 
 def run_statistical_tests(beh: pd.DataFrame) -> pd.DataFrame:
-    """Run Wilcoxon signed-rank tests within each year, BH-FDR corrected.
+    """Run Fisher resampling tests within each year, BH-FDR corrected.
+
+    Uses reRandomStats FisherResamplingTest with medianDiff as the test
+    statistic and 20,000 permutations.
 
     Tests per year:
     - Body temp below vs above breakpoint
-    - Respiration below vs above breakpoint (if available)
 
     Args:
         beh: behavioural_response DataFrame.
@@ -801,6 +803,8 @@ def run_statistical_tests(beh: pd.DataFrame) -> pd.DataFrame:
     Returns:
         DataFrame: one row per test, with raw p, adjusted p, stars.
     """
+    from rerandomstats import FisherResamplingTest
+
     test_rows = []
     years = sorted(beh["year"].dropna().unique().astype(int))
 
@@ -808,29 +812,44 @@ def run_statistical_tests(beh: pd.DataFrame) -> pd.DataFrame:
         yr = beh[beh["year"] == year]
         year_tests = []
 
-        # Body temperature
+        # Body temperature below vs above breakpoint
         paired = yr.dropna(subset=["body_temp_below", "body_temp_above"])
         if len(paired) >= 10:
-            stat, p = wilcoxon(paired["body_temp_below"], paired["body_temp_above"])
+            p = FisherResamplingTest(
+                data_a=paired["body_temp_below"].tolist(),
+                data_b=paired["body_temp_above"].tolist(),
+                func="medianDiff",
+                combination_n=20_000,
+            ).main()
             year_tests.append({
-                "year": year, "test": "body_temp below vs above",
-                "n": len(paired), "statistic": stat, "p_raw": p,
+                "year": year,
+                "test": "body_temp below vs above (Fisher medianDiff)",
+                "n": len(paired),
+                "p_raw": p,
                 "median_below": paired["body_temp_below"].median(),
                 "median_above": paired["body_temp_above"].median(),
                 "median_diff": (paired["body_temp_above"] - paired["body_temp_below"]).median(),
             })
 
-        # Respiration
-        paired_r = yr.dropna(subset=["resp_below", "resp_above"])
-        if len(paired_r) >= 10:
-            stat, p = wilcoxon(paired_r["resp_below"], paired_r["resp_above"])
-            year_tests.append({
-                "year": year, "test": "respiration below vs above",
-                "n": len(paired_r), "statistic": stat, "p_raw": p,
-                "median_below": paired_r["resp_below"].median(),
-                "median_above": paired_r["resp_above"].median(),
-                "median_diff": (paired_r["resp_above"] - paired_r["resp_below"]).median(),
-            })
+        # Respiration (if columns exist and have data)
+        if "resp_below" in yr.columns:
+            paired_r = yr.dropna(subset=["resp_below", "resp_above"])
+            if len(paired_r) >= 10:
+                p = FisherResamplingTest(
+                    data_a=paired_r["resp_below"].tolist(),
+                    data_b=paired_r["resp_above"].tolist(),
+                    func="medianDiff",
+                    combination_n=20_000,
+                ).main()
+                year_tests.append({
+                    "year": year,
+                    "test": "respiration below vs above (Fisher medianDiff)",
+                    "n": len(paired_r),
+                    "p_raw": p,
+                    "median_below": paired_r["resp_below"].median(),
+                    "median_above": paired_r["resp_above"].median(),
+                    "median_diff": (paired_r["resp_above"] - paired_r["resp_below"]).median(),
+                })
 
         # BH-FDR within this year
         if year_tests:
@@ -842,6 +861,111 @@ def run_statistical_tests(beh: pd.DataFrame) -> pd.DataFrame:
             test_rows.extend(year_tests)
 
     return pd.DataFrame(test_rows)
+
+
+# ─────────────────────────────────────────────────────────────
+#  « cross-correlation / cross-covariance below/above bp »
+# ─────────────────────────────────────────────────────────────
+
+def compute_cross_correlation(
+    rumen: pd.DataFrame, bs_results: pd.DataFrame,
+    max_lag: int = 12,
+) -> pd.DataFrame:
+    """Cross-correlation and cross-covariance of climate vs rumen temp,
+    computed separately below and above each animal's breakpoint.
+
+    For each animal with a converged breakpoint (THI and barn temp), the
+    rumen temperature time series is split at the breakpoint.  The
+    normalised cross-correlation function (CCF) and raw cross-covariance
+    are computed for lags -max_lag to +max_lag (in units of the 10-min
+    sampling interval, so max_lag=12 = 2 hours).
+
+    Positive lags mean the climate signal leads the rumen temperature
+    response.
+
+    Args:
+        rumen: rumen_barn.csv DataFrame (must have timestamp column).
+        bs_results: broken_stick_results.csv DataFrame.
+        max_lag: Maximum lag in samples (default 12 = 2 hours).
+
+    Returns:
+        DataFrame with columns: animal_id, year, predictor (thi/temp),
+        region (below/above), lag, xcorr, xcov.
+    """
+    records = []
+
+    for prefix, env_col, conv_col, bp_col in [
+        ("thi", "barn_thi", "thi_converged", "thi_breakpoint"),
+        ("temp", "barn_temp", "temp_converged", "temp_breakpoint"),
+    ]:
+        converged = bs_results[bs_results[conv_col] == True]
+
+        for _, row in converged.iterrows():
+            aid = int(row["animal_id"])
+            year = int(row["year"])
+            bp = row[bp_col]
+
+            grp = rumen[(rumen["animal_id"] == aid) & (rumen["year"] == year)].copy()
+            if len(grp) < 50:
+                continue
+
+            # Sort by timestamp for temporal lag analysis
+            grp = grp.sort_values("timestamp").reset_index(drop=True)
+
+            x_full = grp[env_col].values
+            y_full = grp["body_temp"].values
+
+            for region, mask_fn in [
+                ("below", lambda x: x <= bp),
+                ("above", lambda x: x > bp),
+            ]:
+                mask = mask_fn(x_full)
+                if mask.sum() < max_lag * 3:
+                    continue
+
+                x = x_full[mask]
+                y = y_full[mask]
+
+                # Demean
+                xc = x - np.mean(x)
+                yc = y - np.mean(y)
+
+                sx = np.std(x, ddof=1)
+                sy = np.std(y, ddof=1)
+                n = len(x)
+
+                if sx < 1e-10 or sy < 1e-10:
+                    continue
+
+                for lag in range(-max_lag, max_lag + 1):
+                    if lag >= 0:
+                        x_seg = xc[:n - lag] if lag > 0 else xc
+                        y_seg = yc[lag:] if lag > 0 else yc
+                    else:
+                        x_seg = xc[-lag:]
+                        y_seg = yc[:n + lag]
+
+                    m = len(x_seg)
+                    if m < 10:
+                        continue
+
+                    # Cross-covariance (raw)
+                    xcov = np.sum(x_seg * y_seg) / (m - 1)
+                    # Normalised cross-correlation
+                    xcorr = xcov / (sx * sy)
+
+                    records.append({
+                        "animal_id": aid, "year": year,
+                        "predictor": prefix,
+                        "region": region,
+                        "lag": lag,
+                        "lag_minutes": lag * 10,
+                        "xcorr": xcorr,
+                        "xcov": xcov,
+                        "n": m,
+                    })
+
+    return pd.DataFrame(records)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -932,6 +1056,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Statistical analysis for broken-stick")
     parser.add_argument("--data", type=Path, required=True,
                         help="Directory with CSVs from extraction step")
+    parser.add_argument("--no-resp", action="store_true",
+                        help="Skip respiration analysis (Frontiers paper: "
+                             "rumen temperature only)")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -944,12 +1071,16 @@ def main() -> None:
     log.info("Loading extracted CSVs from %s …", d)
     rumen = pd.read_csv(d / "rumen_barn.csv")
     resp_path = d / "respiration_barn.csv"
-    resp = pd.read_csv(resp_path) if resp_path.exists() else pd.DataFrame()
+    if args.no_resp:
+        resp = pd.DataFrame()
+        log.info("  Respiration analysis SKIPPED (--no-resp)")
+    else:
+        resp = pd.read_csv(resp_path) if resp_path.exists() else pd.DataFrame()
     prod = pd.read_csv(d / "production.csv") if (d / "production.csv").exists() else pd.DataFrame()
 
-    # 1. Broken-stick fits
+    # 1. Broken-stick + Davies/pscore + Hill fits
     log.info("═" * 50)
-    log.info("1. Broken-stick fits …")
+    log.info("1. Broken-stick + Hill fits …")
     bs = run_broken_stick_fits(rumen, resp)
     # Merge production data
     if not prod.empty:
@@ -958,16 +1089,19 @@ def main() -> None:
             on=["animal_id", "year"], how="left",
         )
     bs.to_csv(d / "broken_stick_results.csv", index=False)
-    for prefix, label in [("thi", "THI→body"), ("temp", "Temp→body"),
-                          ("resp_thi", "THI→resp"), ("resp_temp", "Temp→resp")]:
+
+    prefixes = [("thi", "THI→body"), ("temp", "Temp→body")]
+    if not args.no_resp:
+        prefixes += [("resp_thi", "THI→resp"), ("resp_temp", "Temp→resp")]
+
+    for prefix, label in prefixes:
         n_conv = (bs[f"{prefix}_converged"] == True).sum()
         log.info("  %s: %d/%d converged", label, n_conv, len(bs))
 
     # Breakpoint existence test summary
     log.info("─" * 50)
     log.info("  Breakpoint existence tests (p < 0.05):")
-    for prefix, label in [("thi", "THI→body"), ("temp", "Temp→body"),
-                          ("resp_thi", "THI→resp"), ("resp_temp", "Temp→resp")]:
+    for prefix, label in prefixes:
         davies_col = f"{prefix}_davies_p"
         pscore_col = f"{prefix}_pscore_p"
         if davies_col not in bs.columns:
@@ -986,8 +1120,7 @@ def main() -> None:
     # Hill fit summary
     log.info("─" * 50)
     log.info("  Hill (4PL) fits — lower bend point (Sebaugh & McCray 2003):")
-    for prefix, label in [("thi", "THI→body"), ("temp", "Temp→body"),
-                          ("resp_thi", "THI→resp"), ("resp_temp", "Temp→resp")]:
+    for prefix, label in prefixes:
         hill_conv_col = f"{prefix}_hill_converged"
         hill_bend_col = f"{prefix}_hill_bend"
         if hill_conv_col not in bs.columns:
@@ -1022,29 +1155,43 @@ def main() -> None:
     beh.to_csv(d / "behavioural_response.csv", index=False)
     log.info("  %d animals with paired data", len(beh))
 
-    # 4. Statistical tests with BH-FDR
+    # 4. Fisher resampling tests with BH-FDR
     log.info("═" * 50)
-    log.info("4. Wilcoxon tests (within-year, BH-FDR corrected) …")
+    log.info("4. Fisher resampling tests (reRandomStats, BH-FDR corrected) …")
     tests = run_statistical_tests(beh)
     tests.to_csv(d / "statistical_tests.csv", index=False)
     for _, t in tests.iterrows():
         log.info(
-            "  %d | %-30s | n=%3d | p_raw=%.4f | p_adj=%.4f | %s",
+            "  %d | %-45s | n=%3d | p_raw=%.4f | p_adj=%.4f | %s",
             t["year"], t["test"], t["n"], t["p_raw"], t["p_adj"], t["stars"],
         )
 
-    # 5. Breakpoint stability
+    # 5. Cross-correlation / cross-covariance below/above breakpoint
     log.info("═" * 50)
-    log.info("5. Breakpoint stability (repeat animals) …")
+    log.info("5. Cross-correlation below/above breakpoint …")
+    xcorr = compute_cross_correlation(rumen, bs)
+    xcorr.to_csv(d / "cross_correlation.csv", index=False)
+    for pred in ["thi", "temp"]:
+        for region in ["below", "above"]:
+            sub = xcorr[(xcorr["predictor"] == pred) & (xcorr["region"] == region)
+                        & (xcorr["lag"] == 0)]
+            if not sub.empty:
+                log.info("  %s %s bp: median r(lag=0) = %.3f, n=%d animals",
+                         pred.upper(), region, sub["xcorr"].median(),
+                         sub["animal_id"].nunique())
+
+    # 6. Breakpoint stability
+    log.info("═" * 50)
+    log.info("6. Breakpoint stability (repeat animals) …")
     pairs, icc = compute_stability(bs)
     if not pairs.empty:
         pairs.to_csv(d / "breakpoint_stability.csv", index=False)
     log.info("  ICC = %.3f, %d pairs from %d animals",
              icc, len(pairs), pairs["animal_id"].nunique() if not pairs.empty else 0)
 
-    # 6. Summary table
+    # 7. Summary table
     log.info("═" * 50)
-    log.info("6. Summary table …")
+    log.info("7. Summary table …")
     summary = make_summary_table(bs)
     summary.to_csv(d / "summary_table.csv", index=False)
 

@@ -36,6 +36,11 @@ analysis = [
     "matplotlib",
     "scipy",
     "scikit-learn",
+    "rerandomstats",
+    "plotly",
+    "kaleido",
+    "openpyxl",
+    "pyyaml",
 ]
 dev = [
     "pytest >= 7.0",
