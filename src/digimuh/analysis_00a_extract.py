@@ -173,18 +173,18 @@ def _exclude_drinking_windows(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _get_barn(con, date_enter, date_exit, barn_cache):
-    """Fetch and cache hourly barn climate."""
+    """Fetch and cache barn climate at native resolution.
+
+    Returns barn data with a timestamp column, ready for nearest-time
+    merge with rumen/respiration data via pd.merge_asof.
+    """
     key = (date_enter, date_exit)
     if key in barn_cache:
         return barn_cache[key]
     barn = query_df(con, SQL_BARN, (date_enter, date_exit))
     if not barn.empty:
         barn["timestamp"] = pd.to_datetime(barn["timestamp"])
-        barn["hour_key"] = barn["timestamp"].dt.floor("h")
-        barn = barn.groupby("hour_key").agg(
-            barn_temp=("barn_temp", "mean"),
-            barn_thi=("barn_thi", "mean"),
-        ).reset_index()
+        barn = barn.sort_values("timestamp").reset_index(drop=True)
     barn_cache[key] = barn
     return barn
 
@@ -228,13 +228,20 @@ def extract_rumen_barn(
             rumen = rumen.drop(columns=["drink_cycles"])
         if rumen.empty:
             continue
-        rumen["hour_key"] = rumen["timestamp"].dt.floor("h")
+        rumen = rumen.sort_values("timestamp").reset_index(drop=True)
 
         barn = _get_barn(con, enter, exit_, barn_cache)
         if barn.empty:
             continue
 
-        df = rumen.merge(barn, on="hour_key", how="inner")
+        # Nearest-time merge: each rumen reading gets the closest barn
+        # reading within 30 min (works at any barn sensor resolution)
+        df = pd.merge_asof(
+            rumen, barn, on="timestamp",
+            tolerance=pd.Timedelta("30min"),
+            direction="nearest",
+        )
+        df = df.dropna(subset=["barn_temp", "barn_thi"])
         if df.empty:
             continue
 
@@ -268,13 +275,18 @@ def extract_respiration_barn(con, tierauswahl: pd.DataFrame) -> pd.DataFrame:
             log.info("  [%d/%d] Resp data: animal %d (%s)", i + 1, total, aid, year)
 
         resp["timestamp"] = pd.to_datetime(resp["timestamp"])
-        resp["hour_key"] = resp["timestamp"].dt.floor("h")
+        resp = resp.sort_values("timestamp").reset_index(drop=True)
 
         barn = _get_barn(con, enter, exit_, barn_cache)
         if barn.empty:
             continue
 
-        df = resp.merge(barn, on="hour_key", how="inner")
+        df = pd.merge_asof(
+            resp, barn, on="timestamp",
+            tolerance=pd.Timedelta("30min"),
+            direction="nearest",
+        )
+        df = df.dropna(subset=["barn_temp", "barn_thi"])
         if df.empty:
             continue
 
