@@ -541,12 +541,16 @@ def p_to_stars(p: float) -> str:
 
 def run_broken_stick_fits(
     rumen: pd.DataFrame, resp: pd.DataFrame,
+    frontiers_only: bool = False,
 ) -> pd.DataFrame:
     """Fit broken-stick models per animal-year.
 
     Args:
         rumen: rumen_barn.csv DataFrame.
         resp: respiration_barn.csv DataFrame.
+        frontiers_only: If True, skip Davies/pscore/Hill fits
+            (Frontiers paper: broken-stick only).  These methods
+            are reserved for the COMPAG companion papers.
 
     Returns:
         One row per animal-year with breakpoint results.
@@ -584,21 +588,27 @@ def run_broken_stick_fits(
         temp_fit = broken_stick_fit(
             grp["barn_temp"].values, grp["body_temp"].values, x_range=(5, 35))
 
-        # Breakpoint existence tests (body temp)
-        thi_davies = davies_test(
-            grp["barn_thi"].values, grp["body_temp"].values, x_range=(45, 80))
-        thi_pscore = pscore_test(
-            grp["barn_thi"].values, grp["body_temp"].values, x_range=(45, 80))
-        temp_davies = davies_test(
-            grp["barn_temp"].values, grp["body_temp"].values, x_range=(5, 35))
-        temp_pscore = pscore_test(
-            grp["barn_temp"].values, grp["body_temp"].values, x_range=(5, 35))
-
-        # Hill / logistic fits (body temp)
-        thi_hill = hill_fit(
-            grp["barn_thi"].values, grp["body_temp"].values, x_range=(45, 80))
-        temp_hill = hill_fit(
-            grp["barn_temp"].values, grp["body_temp"].values, x_range=(5, 35))
+        # Breakpoint existence tests (body temp) — COMPAG companion papers
+        if not frontiers_only:
+            thi_davies = davies_test(
+                grp["barn_thi"].values, grp["body_temp"].values, x_range=(45, 80))
+            thi_pscore = pscore_test(
+                grp["barn_thi"].values, grp["body_temp"].values, x_range=(45, 80))
+            temp_davies = davies_test(
+                grp["barn_temp"].values, grp["body_temp"].values, x_range=(5, 35))
+            temp_pscore = pscore_test(
+                grp["barn_temp"].values, grp["body_temp"].values, x_range=(5, 35))
+            thi_hill = hill_fit(
+                grp["barn_thi"].values, grp["body_temp"].values, x_range=(45, 80))
+            temp_hill = hill_fit(
+                grp["barn_temp"].values, grp["body_temp"].values, x_range=(5, 35))
+        else:
+            _empty_test = {"p_value": np.nan}
+            thi_davies = thi_pscore = temp_davies = temp_pscore = _empty_test
+            _empty_hill = {"ec50": np.nan, "hill_n": np.nan,
+                           "lower_bend": np.nan, "r_squared": np.nan,
+                           "aic": np.nan, "converged": False}
+            thi_hill = temp_hill = _empty_hill
 
         # Respiration fits
         resp_grp = resp[
@@ -613,26 +623,34 @@ def run_broken_stick_fits(
             resp_temp_fit = broken_stick_fit(
                 resp_grp["barn_temp"].values, resp_grp["resp_rate"].values,
                 x_range=(5, 35))
-            # Breakpoint existence tests (respiration)
-            resp_thi_davies = davies_test(
-                resp_grp["barn_thi"].values, resp_grp["resp_rate"].values,
-                x_range=(45, 80))
-            resp_thi_pscore = pscore_test(
-                resp_grp["barn_thi"].values, resp_grp["resp_rate"].values,
-                x_range=(45, 80))
-            resp_temp_davies = davies_test(
-                resp_grp["barn_temp"].values, resp_grp["resp_rate"].values,
-                x_range=(5, 35))
-            resp_temp_pscore = pscore_test(
-                resp_grp["barn_temp"].values, resp_grp["resp_rate"].values,
-                x_range=(5, 35))
-            # Hill / logistic fits (respiration)
-            resp_thi_hill = hill_fit(
-                resp_grp["barn_thi"].values, resp_grp["resp_rate"].values,
-                x_range=(45, 80))
-            resp_temp_hill = hill_fit(
-                resp_grp["barn_temp"].values, resp_grp["resp_rate"].values,
-                x_range=(5, 35))
+            # Breakpoint existence tests (respiration) — COMPAG
+            if not frontiers_only:
+                resp_thi_davies = davies_test(
+                    resp_grp["barn_thi"].values, resp_grp["resp_rate"].values,
+                    x_range=(45, 80))
+                resp_thi_pscore = pscore_test(
+                    resp_grp["barn_thi"].values, resp_grp["resp_rate"].values,
+                    x_range=(45, 80))
+                resp_temp_davies = davies_test(
+                    resp_grp["barn_temp"].values, resp_grp["resp_rate"].values,
+                    x_range=(5, 35))
+                resp_temp_pscore = pscore_test(
+                    resp_grp["barn_temp"].values, resp_grp["resp_rate"].values,
+                    x_range=(5, 35))
+                resp_thi_hill = hill_fit(
+                    resp_grp["barn_thi"].values, resp_grp["resp_rate"].values,
+                    x_range=(45, 80))
+                resp_temp_hill = hill_fit(
+                    resp_grp["barn_temp"].values, resp_grp["resp_rate"].values,
+                    x_range=(5, 35))
+            else:
+                _empty_test = {"p_value": np.nan}
+                resp_thi_davies = resp_thi_pscore = _empty_test
+                resp_temp_davies = resp_temp_pscore = _empty_test
+                _empty_hill = {"ec50": np.nan, "hill_n": np.nan,
+                               "lower_bend": np.nan, "r_squared": np.nan,
+                               "aic": np.nan, "converged": False}
+                resp_thi_hill = resp_temp_hill = _empty_hill
         else:
             resp_thi_fit = {"breakpoint": np.nan, "converged": False, "n": 0}
             resp_temp_fit = {"breakpoint": np.nan, "converged": False, "n": 0}
@@ -1070,13 +1088,20 @@ def main() -> None:
     parser.add_argument("--no-resp", action="store_true",
                         help="Skip respiration analysis (Frontiers paper: "
                              "rumen temperature only)")
+    parser.add_argument("--frontiers", action="store_true",
+                        help="Frontiers paper mode: skip Davies/pscore/Hill "
+                             "(reserved for COMPAG companion papers)")
     args = parser.parse_args()
 
     setup_logging()
     reset_steps()
     d = args.data
 
-    banner("Broken-stick statistical analysis")
+    if args.frontiers:
+        banner("Broken-stick analysis (Frontiers mode)")
+        log.info("Davies/pscore/Hill SKIPPED (--frontiers, reserved for COMPAG)")
+    else:
+        banner("Broken-stick statistical analysis")
 
     log.info("Loading CSVs from %s", d)
     rumen = pd.read_csv(d / "rumen_barn.csv")
@@ -1089,8 +1114,11 @@ def main() -> None:
     prod = pd.read_csv(d / "production.csv") if (d / "production.csv").exists() else pd.DataFrame()
 
     # ── 1. Model fitting ─────────────────────────────────────
-    section("Model fitting", "Broken-stick, Davies/pscore, Hill (4PL)")
-    bs = run_broken_stick_fits(rumen, resp)
+    if args.frontiers:
+        section("Model fitting", "Broken-stick regression only")
+    else:
+        section("Model fitting", "Broken-stick, Davies/pscore, Hill (4PL)")
+    bs = run_broken_stick_fits(rumen, resp, frontiers_only=args.frontiers)
     if not prod.empty:
         bs = bs.merge(
             prod[["animal_id", "year", "mean_milk_yield_kg", "lactation_nr"]],
@@ -1102,44 +1130,102 @@ def main() -> None:
     if not args.no_resp:
         prefixes += [("resp_thi", "THI > resp"), ("resp_temp", "Barn temp > resp")]
 
-    conv_rows = []
-    for prefix, label in prefixes:
-        n_conv = (bs[f"{prefix}_converged"] == True).sum()
-        davies_col = f"{prefix}_davies_p"
-        pscore_col = f"{prefix}_pscore_p"
-        hill_col = f"{prefix}_hill_converged"
-        hill_bend = f"{prefix}_hill_bend"
+    if args.frontiers:
+        # Simplified table: broken-stick only
+        conv_rows = []
+        for prefix, label in prefixes:
+            n_conv = (bs[f"{prefix}_converged"] == True).sum()
+            conv_rows.append([label, len(bs), f"{n_conv} ({100*n_conv/len(bs):.0f}%)"])
+        result_table("Broken-stick convergence",
+                     ["Model", "n", "Converged"], conv_rows)
+    else:
+        conv_rows = []
+        for prefix, label in prefixes:
+            n_conv = (bs[f"{prefix}_converged"] == True).sum()
+            davies_col = f"{prefix}_davies_p"
+            pscore_col = f"{prefix}_pscore_p"
+            hill_col = f"{prefix}_hill_converged"
+            hill_bend = f"{prefix}_hill_bend"
 
-        n_davies = (bs[davies_col] < 0.05).sum() if davies_col in bs.columns else 0
-        n_pscore = (bs[pscore_col] < 0.05).sum() if pscore_col in bs.columns else 0
-        n_hill = (bs[hill_col] == True).sum() if hill_col in bs.columns else 0
-        n_bend = bs.loc[bs.get(hill_col, pd.Series(dtype=bool)) == True, hill_bend].notna().sum() if hill_col in bs.columns else 0
+            n_davies = (bs[davies_col] < 0.05).sum() if davies_col in bs.columns else 0
+            n_pscore = (bs[pscore_col] < 0.05).sum() if pscore_col in bs.columns else 0
+            n_hill = (bs[hill_col] == True).sum() if hill_col in bs.columns else 0
+            n_bend = bs.loc[bs.get(hill_col, pd.Series(dtype=bool)) == True, hill_bend].notna().sum() if hill_col in bs.columns else 0
 
-        conv_rows.append([
-            label, len(bs),
-            f"{n_davies} ({100*n_davies/len(bs):.0f}%)",
-            f"{n_pscore} ({100*n_pscore/len(bs):.0f}%)",
-            f"{n_conv} ({100*n_conv/len(bs):.0f}%)",
-            f"{n_hill} ({100*n_hill/len(bs):.0f}%)",
-            n_bend,
-        ])
+            conv_rows.append([
+                label, len(bs),
+                f"{n_davies} ({100*n_davies/len(bs):.0f}%)",
+                f"{n_pscore} ({100*n_pscore/len(bs):.0f}%)",
+                f"{n_conv} ({100*n_conv/len(bs):.0f}%)",
+                f"{n_hill} ({100*n_hill/len(bs):.0f}%)",
+                n_bend,
+            ])
+        result_table(
+            "Model convergence",
+            ["Model", "n", "Davies p<.05", "Pscore p<.05",
+             "BS converged", "Hill converged", "Bend valid"],
+            conv_rows,
+        )
+        for prefix, label in prefixes:
+            hill_col = f"{prefix}_hill_converged"
+            hill_bend_col = f"{prefix}_hill_bend"
+            if hill_col not in bs.columns:
+                continue
+            bends = bs.loc[bs[hill_col] == True, hill_bend_col].dropna()
+            if len(bends) > 0:
+                kv(f"{label} Hill bend median [IQR]",
+                   f"{bends.median():.1f} [{bends.quantile(0.25):.1f} - {bends.quantile(0.75):.1f}]")
 
-    result_table(
-        "Model convergence",
-        ["Model", "n", "Davies p<.05", "Pscore p<.05",
-         "BS converged", "Hill converged", "Bend valid"],
-        conv_rows,
-    )
-
-    for prefix, label in prefixes:
-        hill_col = f"{prefix}_hill_converged"
-        hill_bend_col = f"{prefix}_hill_bend"
-        if hill_col not in bs.columns:
-            continue
-        bends = bs.loc[bs[hill_col] == True, hill_bend_col].dropna()
-        if len(bends) > 0:
-            kv(f"{label} Hill bend median [IQR]",
-               f"{bends.median():.1f} [{bends.quantile(0.25):.1f} - {bends.quantile(0.75):.1f}]")
+    # ── 1b. Test breakpoints against literature THI threshold ─
+    section("Breakpoint vs literature threshold",
+            "Fisher resampling: individual breakpoints vs THI 68.8")
+    thi_ref = 68.8  # Hoffmann et al. (2020) mild stress threshold
+    thi_conv = bs[bs["thi_converged"] == True]["thi_breakpoint"].dropna()
+    if len(thi_conv) >= 10:
+        from rerandomstats import FisherResamplingTest
+        # Test: are the individual breakpoints centred on 68.8?
+        # Create a "reference" sample of the same size, all = 68.8
+        ref_sample = [thi_ref] * len(thi_conv)
+        p_vs_ref = FisherResamplingTest(
+            data_a=thi_conv.tolist(),
+            data_b=ref_sample,
+            func="medianDiff",
+            combination_n=20_000,
+        ).main()
+        median_bp = thi_conv.median()
+        diff = median_bp - thi_ref
+        result_table(
+            f"Individual THI breakpoints vs reference THI {thi_ref}",
+            ["n", "Median BP", "Reference", "Diff", "p", "Sig."],
+            [[len(thi_conv), median_bp, thi_ref, diff, p_vs_ref,
+              stars_styled(p_to_stars(p_vs_ref))]],
+        )
+        # Per-year breakdown
+        year_rows = []
+        for year in sorted(bs["year"].unique().astype(int)):
+            yr_bps = bs[(bs["year"] == year) & (bs["thi_converged"] == True)]["thi_breakpoint"].dropna()
+            if len(yr_bps) >= 5:
+                p_yr = FisherResamplingTest(
+                    data_a=yr_bps.tolist(),
+                    data_b=[thi_ref] * len(yr_bps),
+                    func="medianDiff",
+                    combination_n=20_000,
+                ).main()
+                year_rows.append([year, len(yr_bps), yr_bps.median(),
+                                  yr_bps.median() - thi_ref, p_yr,
+                                  stars_styled(p_to_stars(p_yr))])
+        if year_rows:
+            # BH-FDR across years
+            raw_ps = np.array([r[4] for r in year_rows])
+            adj_ps = benjamini_hochberg(raw_ps)
+            for r, adj_p in zip(year_rows, adj_ps):
+                r[4] = adj_p
+                r[5] = stars_styled(p_to_stars(adj_p))
+            result_table(
+                "Per-year (BH-FDR corrected)",
+                ["Year", "n", "Median", "Diff", "p adj", "Sig."],
+                year_rows,
+            )
 
     # ── 2. Spearman ──────────────────────────────────────────
     section("Spearman correlations")
@@ -1182,7 +1268,7 @@ def main() -> None:
 
     # ── 5. Cross-correlation ─────────────────────────────────
     section("Cross-correlation",
-            "Climate vs rumen temp, below/above breakpoint")
+            "Climate vs rumen temp, below/above breakpoint (SEM bands)")
     xcorr = compute_cross_correlation(rumen, bs)
     xcorr.to_csv(d / "cross_correlation.csv", index=False)
 
@@ -1216,12 +1302,93 @@ def main() -> None:
     kv("Pairs", len(pairs))
     kv("Unique animals", pairs["animal_id"].nunique() if not pairs.empty else 0)
 
-    # ── 7. Summary ───────────────────────────────────────────
+    # ── 7. Longitudinal statistical tests ────────────────────
+    section("Longitudinal breakpoint tests",
+            "Fisher resampling: absolute + relative change across years")
+    _run_longitudinal_tests(bs, d)
+
+    # ── 8. Summary ───────────────────────────────────────────
     section("Summary table")
     summary = make_summary_table(bs)
     summary.to_csv(d / "summary_table.csv", index=False)
 
     done(f"All statistics complete. Output in: {d}")
+
+
+def _run_longitudinal_tests(bs: pd.DataFrame, d: Path) -> None:
+    """Fisher resampling tests on longitudinal breakpoints."""
+    from digimuh.console import result_table, kv, stars_styled
+    from rerandomstats import FisherResamplingTest
+
+    for bp_col, conv_col, label in [
+        ("thi_breakpoint", "thi_converged", "THI"),
+        ("temp_breakpoint", "temp_converged", "Barn temp"),
+    ]:
+        conv = bs[bs[conv_col] == True].dropna(subset=[bp_col])
+        if conv.empty:
+            continue
+
+        # Animals in 2+ years
+        year_counts = conv.groupby("animal_id")["year"].nunique()
+        repeat_ids = year_counts[year_counts >= 2].index
+        if len(repeat_ids) < 5:
+            kv(f"{label} repeat animals", f"{len(repeat_ids)} (too few)")
+            continue
+
+        repeat = conv[conv["animal_id"].isin(repeat_ids)].copy()
+        repeat = repeat.sort_values(["animal_id", "year"])
+        first_bp = repeat.groupby("animal_id").first()[bp_col]
+        repeat["bp_change"] = repeat[bp_col] - repeat["animal_id"].map(first_bp)
+        years = sorted(repeat["year"].unique().astype(int))
+
+        # Pairwise year comparisons (absolute breakpoints)
+        test_rows = []
+        raw_ps = []
+        for i, y1 in enumerate(years):
+            for y2 in years[i + 1:]:
+                # Paired: same animals in both years
+                ids_both = set(repeat[repeat["year"] == y1]["animal_id"]) & \
+                           set(repeat[repeat["year"] == y2]["animal_id"])
+                if len(ids_both) < 5:
+                    continue
+                d1 = repeat[(repeat["year"] == y1) & (repeat["animal_id"].isin(ids_both))][bp_col].tolist()
+                d2 = repeat[(repeat["year"] == y2) & (repeat["animal_id"].isin(ids_both))][bp_col].tolist()
+                p = FisherResamplingTest(
+                    data_a=d1, data_b=d2,
+                    func="medianDiff", combination_n=20_000,
+                ).main()
+                test_rows.append([f"{y1} vs {y2}", len(ids_both),
+                                  np.median(d1), np.median(d2),
+                                  np.median(d2) - np.median(d1), p, ""])
+                raw_ps.append(p)
+
+        if test_rows:
+            adj_ps = benjamini_hochberg(np.array(raw_ps))
+            for r, adj_p in zip(test_rows, adj_ps):
+                r[5] = adj_p
+                r[6] = stars_styled(p_to_stars(adj_p))
+            result_table(
+                f"{label} breakpoints: pairwise year comparisons (BH-FDR)",
+                ["Comparison", "n paired", "Median Y1", "Median Y2",
+                 "Diff", "p adj", "Sig."],
+                test_rows,
+            )
+
+        # Relative change from first year: test if different from 0
+        for year in years[1:]:  # skip first year (change = 0)
+            changes = repeat[repeat["year"] == year]["bp_change"].dropna()
+            if len(changes) >= 5:
+                # Test median change vs zero
+                p = FisherResamplingTest(
+                    data_a=changes.tolist(),
+                    data_b=[0.0] * len(changes),
+                    func="medianDiff", combination_n=20_000,
+                ).main()
+                kv(f"{label} {year} change from baseline",
+                   f"median = {changes.median():.1f}, p = {p:.4f} {p_to_stars(p)}")
+
+    # Save longitudinal test results alongside stability
+    log.info("  Longitudinal tests complete.")
 
 
 if __name__ == "__main__":

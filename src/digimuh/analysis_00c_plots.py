@@ -782,83 +782,131 @@ def plot_thi_vs_temp_scatter(bs: pd.DataFrame, out_dir: Path) -> None:
 # ─────────────────────────────────────────────────────────────
 
 def plot_cross_correlation(out_dir: Path) -> None:
-    """Plot mean cross-correlation curves below vs above breakpoint."""
+    """Plot cross-correlation AND cross-covariance curves below vs above bp.
+
+    Error bands are standard error of the mean (SEM).
+    Peak lag is annotated with the delay in minutes.
+    """
     import matplotlib.pyplot as plt
     _setup()
 
     xcorr_path = out_dir / "cross_correlation.csv"
     if not xcorr_path.exists():
+        log.info("  cross_correlation.csv not found, skipping xcorr plots")
         return
 
     xcorr = pd.read_csv(xcorr_path)
     if xcorr.empty:
+        log.info("  cross_correlation.csv is empty, skipping xcorr plots")
         return
 
-    for pred, pred_label in [("thi", "Barn THI"), ("temp", "Barn temperature")]:
-        sub = xcorr[xcorr["predictor"] == pred]
-        if sub.empty:
-            continue
+    log.info("  Plotting cross-correlations (%d rows) …", len(xcorr))
 
-        fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
-
-        for ax, (region, colour, label) in zip(axes, [
-            ("below", COLOURS["below_bp"], "Below breakpoint"),
-            ("above", COLOURS["above_bp"], "Above breakpoint"),
-        ]):
-            rsub = sub[sub["region"] == region]
-            if rsub.empty:
+    # Plot both cross-correlation and cross-covariance
+    for metric, metric_label, ylab, fname_suffix in [
+        ("xcorr", "Cross-correlation", "Cross-correlation (r)", "xcorr"),
+        ("xcov", "Cross-covariance", "Cross-covariance", "xcov"),
+    ]:
+        # ── Separate panels per region ────────────────────────
+        for pred, pred_label in [("thi", "Barn THI"), ("temp", "Barn temperature")]:
+            sub = xcorr[xcorr["predictor"] == pred]
+            if sub.empty:
                 continue
 
-            # Mean and SEM across animals at each lag
-            agg = rsub.groupby("lag_minutes")["xcorr"].agg(["mean", "std", "count"])
-            agg["sem"] = agg["std"] / np.sqrt(agg["count"])
+            fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
 
-            ax.fill_between(agg.index, agg["mean"] - agg["sem"],
-                           agg["mean"] + agg["sem"],
-                           alpha=0.2, color=colour)
-            ax.plot(agg.index, agg["mean"], color=colour, linewidth=2)
+            for ax, (region, colour, label) in zip(axes, [
+                ("below", COLOURS["below_bp"], "Below breakpoint"),
+                ("above", COLOURS["above_bp"], "Above breakpoint"),
+            ]):
+                rsub = sub[sub["region"] == region]
+                if rsub.empty:
+                    continue
+
+                agg = rsub.groupby("lag_minutes")[metric].agg(["mean", "std", "count"])
+                agg["sem"] = agg["std"] / np.sqrt(agg["count"])
+
+                ax.fill_between(agg.index, agg["mean"] - agg["sem"],
+                               agg["mean"] + agg["sem"],
+                               alpha=0.2, color=colour, label="SEM")
+                ax.plot(agg.index, agg["mean"], color=colour, linewidth=2)
+                ax.axhline(0, color="#999", linewidth=0.5, linestyle="--")
+                ax.axvline(0, color="#999", linewidth=0.5, linestyle="--")
+
+                # Annotate peak lag
+                peak_idx = agg["mean"].idxmax()
+                peak_val = agg["mean"].max()
+                if peak_idx != 0:
+                    direction = "after" if peak_idx > 0 else "before"
+                    ax.annotate(
+                        f"Peak: {abs(peak_idx):.0f} min {direction}\n"
+                        f"climate change",
+                        xy=(peak_idx, peak_val),
+                        xytext=(peak_idx + 15, peak_val + 0.02),
+                        fontsize=8, color=colour, fontstyle="italic",
+                        arrowprops=dict(arrowstyle="->", color=colour, lw=1),
+                    )
+                    ax.axvline(peak_idx, color=colour, linewidth=0.8,
+                              linestyle=":", alpha=0.5)
+
+                ax.set_xlabel("Lag (minutes)")
+                ax.set_ylabel(ylab)
+                ax.set_title(f"{label}\n(n={rsub['animal_id'].nunique()} animals)")
+
+            fig.suptitle(
+                f"{metric_label}: {pred_label} vs rumen temperature\n"
+                f"(shaded: ± 1 SEM across animals)",
+                fontsize=13, fontweight="bold")
+            fig.tight_layout()
+            _save(fig, f"{fname_suffix}_{pred}", out_dir)
+
+        # ── Overlay: below vs above on same axes ─────────────
+        for pred, pred_label in [("thi", "Barn THI"), ("temp", "Barn temperature")]:
+            sub = xcorr[xcorr["predictor"] == pred]
+            if sub.empty:
+                continue
+
+            fig, ax = plt.subplots(figsize=(9, 6))
+            for region, colour, label in [
+                ("below", COLOURS["below_bp"], "Below breakpoint"),
+                ("above", COLOURS["above_bp"], "Above breakpoint"),
+            ]:
+                rsub = sub[sub["region"] == region]
+                if rsub.empty:
+                    continue
+                agg = rsub.groupby("lag_minutes")[metric].agg(["mean", "std", "count"])
+                agg["sem"] = agg["std"] / np.sqrt(agg["count"])
+
+                ax.fill_between(agg.index, agg["mean"] - agg["sem"],
+                               agg["mean"] + agg["sem"],
+                               alpha=0.15, color=colour)
+                ax.plot(agg.index, agg["mean"], color=colour, linewidth=2,
+                        label=label)
+
+                # Annotate peak lag
+                peak_idx = agg["mean"].idxmax()
+                peak_val = agg["mean"].max()
+                if peak_idx != 0:
+                    direction = "after" if peak_idx > 0 else "before"
+                    offset_x = 20 if region == "above" else -20
+                    ax.annotate(
+                        f"{abs(peak_idx):.0f} min {direction}",
+                        xy=(peak_idx, peak_val),
+                        xytext=(peak_idx + offset_x, peak_val),
+                        fontsize=8, color=colour, fontstyle="italic",
+                        arrowprops=dict(arrowstyle="->", color=colour, lw=1),
+                    )
+
             ax.axhline(0, color="#999", linewidth=0.5, linestyle="--")
             ax.axvline(0, color="#999", linewidth=0.5, linestyle="--")
             ax.set_xlabel("Lag (minutes)")
-            ax.set_ylabel("Cross-correlation (r)")
-            ax.set_title(f"{label}\n(n={rsub['animal_id'].nunique()} animals)")
-            ax.set_ylim(-0.15, 0.55)
-
-        fig.suptitle(f"Cross-correlation: {pred_label} vs rumen temperature",
-                     fontsize=13, fontweight="bold")
-        fig.tight_layout()
-        _save(fig, f"xcorr_{pred}", out_dir)
-
-    # Combined: overlay below vs above on same axes
-    for pred, pred_label in [("thi", "Barn THI"), ("temp", "Barn temperature")]:
-        sub = xcorr[xcorr["predictor"] == pred]
-        if sub.empty:
-            continue
-
-        fig, ax = plt.subplots(figsize=(9, 6))
-        for region, colour, label in [
-            ("below", COLOURS["below_bp"], "Below breakpoint"),
-            ("above", COLOURS["above_bp"], "Above breakpoint"),
-        ]:
-            rsub = sub[sub["region"] == region]
-            if rsub.empty:
-                continue
-            agg = rsub.groupby("lag_minutes")["xcorr"].agg(["mean", "std", "count"])
-            agg["sem"] = agg["std"] / np.sqrt(agg["count"])
-
-            ax.fill_between(agg.index, agg["mean"] - agg["sem"],
-                           agg["mean"] + agg["sem"],
-                           alpha=0.15, color=colour)
-            ax.plot(agg.index, agg["mean"], color=colour, linewidth=2, label=label)
-
-        ax.axhline(0, color="#999", linewidth=0.5, linestyle="--")
-        ax.axvline(0, color="#999", linewidth=0.5, linestyle="--")
-        ax.set_xlabel("Lag (minutes)")
-        ax.set_ylabel("Cross-correlation (r)")
-        ax.set_title(f"Cross-correlation: {pred_label} vs rumen temperature")
-        ax.legend()
-        fig.tight_layout()
-        _save(fig, f"xcorr_{pred}_overlay", out_dir)
+            ax.set_ylabel(ylab)
+            ax.set_title(
+                f"{metric_label}: {pred_label} vs rumen temperature\n"
+                f"(shaded: ± 1 SEM)")
+            ax.legend()
+            fig.tight_layout()
+            _save(fig, f"{fname_suffix}_{pred}_overlay", out_dir)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -868,7 +916,7 @@ def plot_cross_correlation(out_dir: Path) -> None:
 def plot_longitudinal_breakpoints(bs: pd.DataFrame, out_dir: Path) -> None:
     """Track how individual breakpoints change across years.
 
-    Only animals present in 3+ years are included.  Shows both absolute
+    Only animals present in 2+ years are included.  Shows both absolute
     breakpoints and change relative to the animal's first year.
     """
     import matplotlib.pyplot as plt
@@ -880,13 +928,16 @@ def plot_longitudinal_breakpoints(bs: pd.DataFrame, out_dir: Path) -> None:
     ]:
         conv = bs[bs[conv_col] == True].dropna(subset=[bp_col])
         if conv.empty:
+            log.info("  %s: no converged animals, skipping", fname)
             continue
 
-        # Find animals present in 3+ years
+        # Find animals present in 2+ years
         year_counts = conv.groupby("animal_id")["year"].nunique()
-        repeat_ids = year_counts[year_counts >= 3].index
+        repeat_ids = year_counts[year_counts >= 2].index
+        log.info("  %s: %d animals with 2+ years (of %d converged)",
+                 fname, len(repeat_ids), len(conv["animal_id"].unique()))
         if len(repeat_ids) < 3:
-            log.info("  %s: fewer than 3 animals with 3+ years, skipping", fname)
+            log.info("  %s: fewer than 3 repeat animals, skipping", fname)
             continue
 
         repeat = conv[conv["animal_id"].isin(repeat_ids)].copy()
@@ -922,8 +973,36 @@ def plot_longitudinal_breakpoints(bs: pd.DataFrame, out_dir: Path) -> None:
         )
         ax.set_xlabel("Year")
         ax.set_ylabel(env_label)
-        ax.set_title(f"Absolute breakpoints\n(n={len(repeat_ids)} animals, 3+ years)")
+        ax.set_title(f"Absolute breakpoints\n(n={len(repeat_ids)} animals, 2+ years)")
         ax.set_xticks(years)
+
+        # Significance brackets: consecutive years (Fisher resampling, BH-FDR)
+        try:
+            from rerandomstats import FisherResamplingTest
+            from digimuh.analysis_00b_stats import benjamini_hochberg, p_to_stars
+            raw_ps_abs = []
+            year_pairs_abs = []
+            for j in range(len(years) - 1):
+                y1, y2 = years[j], years[j + 1]
+                ids_both = set(repeat[repeat["year"] == y1]["animal_id"]) & \
+                           set(repeat[repeat["year"] == y2]["animal_id"])
+                if len(ids_both) >= 5:
+                    d1 = repeat[(repeat["year"] == y1) & (repeat["animal_id"].isin(ids_both))][bp_col].tolist()
+                    d2 = repeat[(repeat["year"] == y2) & (repeat["animal_id"].isin(ids_both))][bp_col].tolist()
+                    p = FisherResamplingTest(data_a=d1, data_b=d2,
+                                            func="medianDiff", combination_n=20_000).main()
+                    raw_ps_abs.append(p)
+                    year_pairs_abs.append((y1, y2))
+            if raw_ps_abs:
+                adj_ps_abs = benjamini_hochberg(np.array(raw_ps_abs))
+                ymax = ax.get_ylim()[1]
+                step = (ymax - ax.get_ylim()[0]) * 0.05
+                for k, ((y1, y2), adj_p) in enumerate(zip(year_pairs_abs, adj_ps_abs)):
+                    stars = p_to_stars(adj_p)
+                    add_significance_bracket(ax, y1, y2, ymax + step * k, stars)
+                ax.set_ylim(ax.get_ylim()[0], ymax + step * (len(raw_ps_abs) + 1))
+        except (ImportError, Exception) as e:
+            log.debug("  Skipping longitudinal brackets: %s", e)
 
         # ── Panel B: Relative change from first year ─────────
         ax = axes[1]
@@ -944,8 +1023,30 @@ def plot_longitudinal_breakpoints(bs: pd.DataFrame, out_dir: Path) -> None:
         )
         ax.axhline(0, color="#999", linestyle="--", linewidth=1)
         ax.set_xlabel("Year")
-        ax.set_ylabel(f"Change from first year")
-        ax.set_title(f"Relative change\n(baseline = animal's first summer)")
+        ax.set_ylabel("Change from first year")
+
+        # Significance: test if each year's change differs from 0
+        try:
+            from rerandomstats import FisherResamplingTest
+            from digimuh.analysis_00b_stats import p_to_stars
+            anno_lines = []
+            for y in years[1:]:  # first year is always 0
+                changes = repeat[repeat["year"] == y]["bp_change"].dropna()
+                if len(changes) >= 5:
+                    p = FisherResamplingTest(
+                        data_a=changes.tolist(),
+                        data_b=[0.0] * len(changes),
+                        func="medianDiff", combination_n=20_000).main()
+                    stars = p_to_stars(p)
+                    if stars != "n.s.":
+                        anno_lines.append(f"{y}: {stars}")
+                    ax.text(y, changes.median(), stars,
+                            ha="center", va="bottom", fontsize=8,
+                            fontweight="bold", color="#333", zorder=5)
+        except (ImportError, Exception):
+            pass
+
+        ax.set_title("Relative change\n(baseline = animal's first summer)")
         ax.set_xticks(years)
 
         fig.suptitle(f"Longitudinal {env_label} tracking",
@@ -1173,19 +1274,27 @@ def main() -> None:
 
     log.info("Generating figures …")
 
-    plot_grouped_boxplots(bs, d)
-    plot_paired_below_above(beh, tests, d)
-    plot_paired_rumen_vs_resp(bs, d)
-    plot_spearman(spearman, d)
-    plot_climate(climate, d)
-    plot_predictors(bs, d)
-    plot_stability(pairs, icc, d)
-    plot_thi_vs_temp_scatter(bs, d)
-    plot_bodytemp_vs_resp_scatter(bs, d)
-    plot_examples(rumen, resp, bs, d)
-    plot_cross_correlation(d)
-    plot_longitudinal_breakpoints(bs, d)
-    plot_threshold_sankey(bs, d)
+    _plot_calls = [
+        ("Grouped boxplots", lambda: plot_grouped_boxplots(bs, d)),
+        ("Paired below/above", lambda: plot_paired_below_above(beh, tests, d)),
+        ("Paired rumen vs resp", lambda: plot_paired_rumen_vs_resp(bs, d)),
+        ("Spearman histograms", lambda: plot_spearman(spearman, d)),
+        ("Climate time series", lambda: plot_climate(climate, d)),
+        ("Predictors", lambda: plot_predictors(bs, d)),
+        ("Stability scatter", lambda: plot_stability(pairs, icc, d)),
+        ("THI vs temp scatter", lambda: plot_thi_vs_temp_scatter(bs, d)),
+        ("Body temp vs resp scatter", lambda: plot_bodytemp_vs_resp_scatter(bs, d)),
+        ("Diagnostic examples", lambda: plot_examples(rumen, resp, bs, d)),
+        ("Cross-correlation", lambda: plot_cross_correlation(d)),
+        ("Longitudinal breakpoints", lambda: plot_longitudinal_breakpoints(bs, d)),
+        ("Sankey diagrams", lambda: plot_threshold_sankey(bs, d)),
+    ]
+
+    for name, fn in _plot_calls:
+        try:
+            fn()
+        except Exception as e:
+            log.warning("  %s FAILED: %s", name, e)
 
     log.info("All figures saved to %s", d)
 
