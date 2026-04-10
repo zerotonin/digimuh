@@ -1162,6 +1162,8 @@ def compute_event_triggered_average(
             x = grp[env_col].values
             y = grp["body_temp"].values
             n = len(x)
+            # Animal's overall mean body temp (for centering across animals)
+            animal_mean_bt = np.mean(y)
 
             # Find upward crossings: x[i] <= bp and x[i+1] > bp
             below = x[:-1] <= bp
@@ -1197,6 +1199,7 @@ def compute_event_triggered_average(
                         "relative_lag": j - window,
                         "relative_minutes": (j - window) * 10,
                         "body_temp": y[idx],
+                        "body_temp_centered": y[idx] - animal_mean_bt,
                         "body_temp_baseline": y[idx] - pre_mean,
                         "climate_val": x[idx],
                     })
