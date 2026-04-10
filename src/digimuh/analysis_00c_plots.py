@@ -785,7 +785,8 @@ def plot_cross_correlation(out_dir: Path) -> None:
     """Plot cross-correlation AND cross-covariance curves below vs above bp.
 
     Error bands are standard error of the mean (SEM).
-    Peak lag is annotated with the delay in minutes.
+    Peak lag annotated with vertical coloured line and horizontal arrow
+    from lag=0 to peak, labelled 'rumen temperature N min later'.
     """
     import matplotlib.pyplot as plt
     _setup()
@@ -801,6 +802,30 @@ def plot_cross_correlation(out_dir: Path) -> None:
         return
 
     log.info("  Plotting cross-correlations (%d rows) …", len(xcorr))
+
+    def _annotate_peak(ax, agg, colour, y_offset_frac=0.08):
+        """Add vertical peak line + horizontal arrow from lag=0."""
+        peak_lag = agg["mean"].idxmax()
+        peak_val = agg["mean"].max()
+        y_range = ax.get_ylim()[1] - ax.get_ylim()[0]
+        arrow_y = peak_val + y_range * y_offset_frac
+
+        if abs(peak_lag) > 5:  # only annotate if peak is away from zero
+            # Vertical dashed line at peak
+            ax.axvline(peak_lag, color=colour, linewidth=1.2,
+                       linestyle="--", alpha=0.7)
+
+            # Horizontal arrow from lag=0 to peak
+            ax.annotate(
+                "", xy=(peak_lag, arrow_y), xytext=(0, arrow_y),
+                arrowprops=dict(arrowstyle="<->", color=colour, lw=1.5),
+            )
+            # Label above the arrow
+            mid_x = peak_lag / 2
+            ax.text(mid_x, arrow_y + y_range * 0.02,
+                    f"rumen temperature\n{abs(peak_lag):.0f} min later",
+                    ha="center", va="bottom", fontsize=8,
+                    color=colour, fontstyle="italic")
 
     # Plot both cross-correlation and cross-covariance
     for metric, metric_label, ylab, fname_suffix in [
@@ -831,23 +856,10 @@ def plot_cross_correlation(out_dir: Path) -> None:
                                alpha=0.2, color=colour, label="SEM")
                 ax.plot(agg.index, agg["mean"], color=colour, linewidth=2)
                 ax.axhline(0, color="#999", linewidth=0.5, linestyle="--")
-                ax.axvline(0, color="#999", linewidth=0.5, linestyle="--")
+                ax.axvline(0, color="#999", linewidth=1, linestyle="--",
+                           label="Climate change")
 
-                # Annotate peak lag
-                peak_idx = agg["mean"].idxmax()
-                peak_val = agg["mean"].max()
-                if peak_idx != 0:
-                    direction = "after" if peak_idx > 0 else "before"
-                    ax.annotate(
-                        f"Peak: {abs(peak_idx):.0f} min {direction}\n"
-                        f"climate change",
-                        xy=(peak_idx, peak_val),
-                        xytext=(peak_idx + 15, peak_val + 0.02),
-                        fontsize=8, color=colour, fontstyle="italic",
-                        arrowprops=dict(arrowstyle="->", color=colour, lw=1),
-                    )
-                    ax.axvline(peak_idx, color=colour, linewidth=0.8,
-                              linestyle=":", alpha=0.5)
+                _annotate_peak(ax, agg, colour)
 
                 ax.set_xlabel("Lag (minutes)")
                 ax.set_ylabel(ylab)
@@ -866,7 +878,9 @@ def plot_cross_correlation(out_dir: Path) -> None:
             if sub.empty:
                 continue
 
-            fig, ax = plt.subplots(figsize=(9, 6))
+            fig, ax = plt.subplots(figsize=(10, 6))
+            y_offsets = {"below": 0.05, "above": 0.12}
+
             for region, colour, label in [
                 ("below", COLOURS["below_bp"], "Below breakpoint"),
                 ("above", COLOURS["above_bp"], "Above breakpoint"),
@@ -883,22 +897,11 @@ def plot_cross_correlation(out_dir: Path) -> None:
                 ax.plot(agg.index, agg["mean"], color=colour, linewidth=2,
                         label=label)
 
-                # Annotate peak lag
-                peak_idx = agg["mean"].idxmax()
-                peak_val = agg["mean"].max()
-                if peak_idx != 0:
-                    direction = "after" if peak_idx > 0 else "before"
-                    offset_x = 20 if region == "above" else -20
-                    ax.annotate(
-                        f"{abs(peak_idx):.0f} min {direction}",
-                        xy=(peak_idx, peak_val),
-                        xytext=(peak_idx + offset_x, peak_val),
-                        fontsize=8, color=colour, fontstyle="italic",
-                        arrowprops=dict(arrowstyle="->", color=colour, lw=1),
-                    )
+                _annotate_peak(ax, agg, colour, y_offset_frac=y_offsets[region])
 
             ax.axhline(0, color="#999", linewidth=0.5, linestyle="--")
-            ax.axvline(0, color="#999", linewidth=0.5, linestyle="--")
+            ax.axvline(0, color="#999", linewidth=1, linestyle="--",
+                       label="Climate change")
             ax.set_xlabel("Lag (minutes)")
             ax.set_ylabel(ylab)
             ax.set_title(
@@ -914,7 +917,11 @@ def plot_cross_correlation(out_dir: Path) -> None:
 # ─────────────────────────────────────────────────────────────
 
 def plot_tnf_yield(out_dir: Path) -> None:
-    """Scatter plots: thermoneutral fraction vs milk yield."""
+    """Scatter plots: daily thermoneutral fraction vs daily milk yield.
+
+    Each dot is one cow-day.  Panel A shows absolute yield, Panel B
+    shows relative yield (daily yield / cow-specific P95).
+    """
     import matplotlib.pyplot as plt
     from scipy.stats import spearmanr
     _setup()
@@ -928,61 +935,58 @@ def plot_tnf_yield(out_dir: Path) -> None:
     if df.empty:
         return
 
-    valid = df.dropna(subset=["mean_thi_tnf", "mean_milk_yield_kg"])
-    if len(valid) < 10:
-        log.info("  Too few animals for TNF vs yield plot (%d)", len(valid))
+    valid = df.dropna(subset=["thi_tnf", "daily_yield_kg", "relative_yield"])
+    if len(valid) < 20:
+        log.info("  Too few cow-days for TNF vs yield plot (%d)", len(valid))
         return
 
-    log.info("  Plotting TNF vs yield (%d animal-years) …", len(valid))
+    n_cows = valid["animal_id"].nunique()
+    log.info("  Plotting TNF vs yield (%d cow-days, %d animals) …",
+             len(valid), n_cows)
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
 
-    # Panel A: TNF vs absolute yield
+    # ── Panel A: TNF vs absolute daily yield ──────────────────
     ax = axes[0]
     for year in sorted(valid["year"].unique().astype(int)):
         sub = valid[valid["year"] == year]
-        ax.scatter(sub["mean_thi_tnf"], sub["mean_milk_yield_kg"],
-                   s=20, alpha=0.6, label=str(year),
+        ax.scatter(sub["thi_tnf"], sub["daily_yield_kg"],
+                   s=4, alpha=0.15, label=str(year),
                    color=COLOURS["year"].get(year, "#888"))
 
-    rs, p = spearmanr(valid["mean_thi_tnf"], valid["mean_milk_yield_kg"])
-    # Regression line
-    z = np.polyfit(valid["mean_thi_tnf"], valid["mean_milk_yield_kg"], 1)
-    xl = np.linspace(valid["mean_thi_tnf"].min(), valid["mean_thi_tnf"].max(), 50)
-    ax.plot(xl, np.polyval(z, xl), "--", color=COLOURS["fit_line"], linewidth=1.5)
+    rs, p = spearmanr(valid["thi_tnf"], valid["daily_yield_kg"])
+    z = np.polyfit(valid["thi_tnf"], valid["daily_yield_kg"], 1)
+    xl = np.linspace(0, 1, 50)
+    ax.plot(xl, np.polyval(z, xl), "--", color=COLOURS["fit_line"], linewidth=2)
 
-    ax.set_xlabel("Mean thermoneutral fraction (TNF)")
-    ax.set_ylabel("Mean milk yield (kg/milking)")
-    ax.set_title(f"TNF vs milk yield\nSpearman rs = {rs:.3f}, p = {p:.4f}, n = {len(valid)}")
-    ax.legend(fontsize=8, title="Year")
+    ax.set_xlabel("Daily thermoneutral fraction (TNF)")
+    ax.set_ylabel("Daily milk yield (kg)")
+    ax.set_title(f"TNF vs daily yield\n"
+                 f"rs = {rs:.3f}, p = {p:.2e}, n = {len(valid):,} cow-days")
+    ax.legend(fontsize=8, title="Year", markerscale=3)
 
-    # Panel B: TNF vs relative yield (multi-year animals)
+    # ── Panel B: TNF vs relative yield (cow-specific P95) ─────
     ax = axes[1]
-    multi = df[df["n_years"] > 1].dropna(subset=["mean_thi_tnf", "relative_yield"])
-    if len(multi) >= 10:
-        for year in sorted(multi["year"].unique().astype(int)):
-            sub = multi[multi["year"] == year]
-            ax.scatter(sub["mean_thi_tnf"], sub["relative_yield"],
-                       s=20, alpha=0.6, label=str(year),
-                       color=COLOURS["year"].get(year, "#888"))
+    for year in sorted(valid["year"].unique().astype(int)):
+        sub = valid[valid["year"] == year]
+        ax.scatter(sub["thi_tnf"], sub["relative_yield"],
+                   s=4, alpha=0.15, label=str(year),
+                   color=COLOURS["year"].get(year, "#888"))
 
-        rs_rel, p_rel = spearmanr(multi["mean_thi_tnf"], multi["relative_yield"])
-        z = np.polyfit(multi["mean_thi_tnf"], multi["relative_yield"], 1)
-        xl = np.linspace(multi["mean_thi_tnf"].min(), multi["mean_thi_tnf"].max(), 50)
-        ax.plot(xl, np.polyval(z, xl), "--", color=COLOURS["fit_line"], linewidth=1.5)
-        ax.axhline(1.0, color="#999", linestyle=":", linewidth=0.8, label="Reference (P95)")
+    rs_rel, p_rel = spearmanr(valid["thi_tnf"], valid["relative_yield"])
+    z = np.polyfit(valid["thi_tnf"], valid["relative_yield"], 1)
+    ax.plot(xl, np.polyval(z, xl), "--", color=COLOURS["fit_line"], linewidth=2)
+    ax.axhline(1.0, color="#999", linestyle=":", linewidth=0.8, label="P95 reference")
 
-        ax.set_xlabel("Mean thermoneutral fraction (TNF)")
-        ax.set_ylabel("Relative milk yield (yield / P95)")
-        ax.set_title(f"TNF vs relative yield (multi-year)\n"
-                     f"Spearman rs = {rs_rel:.3f}, p = {p_rel:.4f}, n = {len(multi)}")
-        ax.legend(fontsize=8, title="Year")
-    else:
-        ax.text(0.5, 0.5, f"Too few multi-year animals (n={len(multi)})",
-                transform=ax.transAxes, ha="center")
-        ax.set_title("TNF vs relative yield (multi-year)")
+    ax.set_xlabel("Daily thermoneutral fraction (TNF)")
+    ax.set_ylabel("Relative daily yield (yield / cow P95)")
+    ax.set_title(f"TNF vs relative yield\n"
+                 f"rs = {rs_rel:.3f}, p = {p_rel:.2e}, n = {len(valid):,} cow-days")
+    ax.legend(fontsize=8, title="Year", markerscale=3)
 
-    fig.suptitle("Thermoneutral fraction vs milk yield", fontsize=13, fontweight="bold")
+    fig.suptitle(f"Thermoneutral fraction vs milk yield "
+                 f"({n_cows} animals)",
+                 fontsize=13, fontweight="bold")
     fig.tight_layout()
     _save(fig, "tnf_yield", out_dir)
 

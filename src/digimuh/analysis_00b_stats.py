@@ -893,7 +893,7 @@ def run_statistical_tests(beh: pd.DataFrame) -> pd.DataFrame:
 
 def compute_cross_correlation(
     rumen: pd.DataFrame, bs_results: pd.DataFrame,
-    max_lag: int = 12,
+    max_lag: int = 24,
 ) -> pd.DataFrame:
     """Cross-correlation and cross-covariance of climate vs rumen temp,
     computed separately below and above each animal's breakpoint.
@@ -902,7 +902,7 @@ def compute_cross_correlation(
     rumen temperature time series is split at the breakpoint.  The
     normalised cross-correlation function (CCF) and raw cross-covariance
     are computed for lags -max_lag to +max_lag (in units of the 10-min
-    sampling interval, so max_lag=12 = 2 hours).
+    sampling interval, so max_lag=24 = 4 hours).
 
     Positive lags mean the climate signal leads the rumen temperature
     response.
@@ -910,7 +910,7 @@ def compute_cross_correlation(
     Args:
         rumen: rumen_barn.csv DataFrame (must have timestamp column).
         bs_results: broken_stick_results.csv DataFrame.
-        max_lag: Maximum lag in samples (default 12 = 2 hours).
+        max_lag: Maximum lag in samples (default 24 = 4 hours).
 
     Returns:
         DataFrame with columns: animal_id, year, predictor (thi/temp),
@@ -1137,52 +1137,57 @@ def compute_thermoneutral_fraction(
 
 
 def compute_tnf_yield_analysis(
-    tnf: pd.DataFrame, bs_results: pd.DataFrame,
+    tnf: pd.DataFrame, daily_yield: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Correlate thermoneutral fraction with normalised milk yield.
+    """Merge daily TNF with daily milk yield for per-cow, per-day pairs.
 
-    Per-animal summary: mean TNF across days, milk yield normalised
-    to P95 of that animal's yield across years (robust reference max).
+    For each cow, each day produces two floats:
+    - thi_tnf: fraction of the day below the cow's THI breakpoint (0-1)
+    - relative_yield: that day's milk yield / cow-specific P95 (0-1ish)
 
-    For single-year animals the P95 equals the mean, so relative_yield
-    is 1.0.  These are included in the absolute analysis but excluded
-    from the relative analysis.
+    The P95 is the 95th percentile of each individual cow's daily yields
+    across her entire dataset (all years).  This is a robust, cow-specific
+    reference maximum that avoids outlier sensitivity of the absolute max.
 
     Args:
         tnf: Daily TNF DataFrame from compute_thermoneutral_fraction.
-        bs_results: broken_stick_results with mean_milk_yield_kg.
+        daily_yield: Daily milk yield DataFrame (animal_id, date,
+            daily_yield_kg, year).
 
     Returns:
-        DataFrame: one row per animal-year with mean_tnf, yield, P95,
-        relative_yield.
+        DataFrame with one row per cow-day: animal_id, year, date,
+        thi_tnf, temp_tnf, daily_yield_kg, yield_p95, relative_yield.
     """
-    # Mean TNF per animal-year
-    tnf_summary = tnf.groupby(["animal_id", "year"]).agg(
-        mean_thi_tnf=("thi_tnf", "mean"),
-        median_thi_tnf=("thi_tnf", "median"),
-        mean_temp_tnf=("temp_tnf", "mean"),
-        n_days=("date", "nunique"),
-    ).reset_index()
+    if tnf.empty or daily_yield.empty:
+        return pd.DataFrame()
 
-    # Merge with milk yield
-    yield_cols = ["animal_id", "year", "mean_milk_yield_kg"]
-    if "lactation_nr" in bs_results.columns:
-        yield_cols.append("lactation_nr")
-    merged = tnf_summary.merge(
-        bs_results[yield_cols].drop_duplicates(),
-        on=["animal_id", "year"], how="left",
+    # Ensure date columns are comparable
+    tnf = tnf.copy()
+    daily_yield = daily_yield.copy()
+    tnf["date"] = pd.to_datetime(tnf["date"]).dt.date
+    daily_yield["date"] = pd.to_datetime(daily_yield["date"]).dt.date
+
+    # Merge TNF and yield on (animal_id, date)
+    merged = tnf.merge(
+        daily_yield[["animal_id", "date", "daily_yield_kg", "n_milkings"]],
+        on=["animal_id", "date"],
+        how="inner",
     )
 
-    # P95 reference yield per animal (robust max across years)
-    # For animals with 1 year: P95 = their value → relative = 1.0
-    yield_ref = bs_results.groupby("animal_id")["mean_milk_yield_kg"].agg(
-        yield_p95=lambda x: np.nanpercentile(x.dropna(), 95) if len(x.dropna()) > 1
-                   else x.dropna().iloc[0] if len(x.dropna()) == 1 else np.nan,
-        n_years=lambda x: x.notna().sum(),
+    if merged.empty:
+        return pd.DataFrame()
+
+    # Cow-specific P95: robust reference maximum from ALL that cow's daily yields
+    cow_p95 = daily_yield.groupby("animal_id")["daily_yield_kg"].agg(
+        yield_p95=lambda x: np.nanpercentile(x.dropna(), 95),
+        yield_median=lambda x: x.median(),
+        n_yield_days=lambda x: x.notna().sum(),
     ).reset_index()
 
-    merged = merged.merge(yield_ref, on="animal_id", how="left")
-    merged["relative_yield"] = merged["mean_milk_yield_kg"] / merged["yield_p95"]
+    merged = merged.merge(cow_p95, on="animal_id", how="left")
+
+    # Relative yield: this day's yield / this cow's P95
+    merged["relative_yield"] = merged["daily_yield_kg"] / merged["yield_p95"]
 
     return merged
 
@@ -1408,50 +1413,74 @@ def main() -> None:
             xcorr_rows,
         )
 
-    # ── 7. Thermoneutral fraction vs milk yield ──────────────
+    # ── 7. Thermoneutral fraction vs daily milk yield ────────
     section("Thermoneutral fraction (TNF)",
-            "Daily fraction below individual breakpoint vs milk yield")
+            "Daily fraction below breakpoint vs daily milk yield (cow-specific P95)")
     tnf = compute_thermoneutral_fraction(rumen, bs)
     tnf.to_csv(d / "thermoneutral_fraction.csv", index=False)
     kv("Daily TNF records", len(tnf))
     kv("Animals with TNF", tnf["animal_id"].nunique() if not tnf.empty else 0)
 
-    if not tnf.empty:
-        tnf_yield = compute_tnf_yield_analysis(tnf, bs)
+    # Load daily milk yield
+    daily_yield_path = d / "daily_milk_yield.csv"
+    if daily_yield_path.exists() and not tnf.empty:
+        daily_yield = pd.read_csv(daily_yield_path)
+        kv("Daily yield records", len(daily_yield))
+
+        tnf_yield = compute_tnf_yield_analysis(tnf, daily_yield)
         tnf_yield.to_csv(d / "tnf_yield.csv", index=False)
+        kv("Matched cow-day pairs", len(tnf_yield))
+        kv("Animals with pairs", tnf_yield["animal_id"].nunique() if not tnf_yield.empty else 0)
 
-        # Spearman: TNF vs absolute yield
-        valid = tnf_yield.dropna(subset=["mean_thi_tnf", "mean_milk_yield_kg"])
-        if len(valid) >= 10:
-            rs, p = spearmanr(valid["mean_thi_tnf"], valid["mean_milk_yield_kg"])
-            kv("THI TNF vs yield: Spearman rs", f"{rs:.3f} (p={p:.4f})")
+        if not tnf_yield.empty:
+            valid = tnf_yield.dropna(subset=["thi_tnf", "relative_yield"])
+            if len(valid) >= 20:
+                # Spearman on all daily pairs
+                rs, p = spearmanr(valid["thi_tnf"], valid["daily_yield_kg"])
+                kv("TNF vs daily yield: Spearman rs", f"{rs:.3f} (p={p:.2e})")
 
-        # Spearman: TNF vs relative yield (multi-year animals only)
-        multi = tnf_yield[tnf_yield["n_years"] > 1].dropna(
-            subset=["mean_thi_tnf", "relative_yield"])
-        if len(multi) >= 10:
-            rs_rel, p_rel = spearmanr(multi["mean_thi_tnf"], multi["relative_yield"])
-            kv("THI TNF vs relative yield (multi-year)", f"{rs_rel:.3f} (p={p_rel:.4f})")
-            kv("  n multi-year animal-years", len(multi))
+                rs_rel, p_rel = spearmanr(valid["thi_tnf"], valid["relative_yield"])
+                kv("TNF vs relative yield: Spearman rs", f"{rs_rel:.3f} (p={p_rel:.2e})")
 
-        # Summary table: TNF quartiles vs yield
-        if len(valid) >= 20:
-            valid = valid.copy()
-            valid["tnf_quartile"] = pd.qcut(valid["mean_thi_tnf"], 4,
-                                            labels=["Q1 (low TNF)", "Q2", "Q3", "Q4 (high TNF)"])
-            q_rows = []
-            for q in ["Q1 (low TNF)", "Q2", "Q3", "Q4 (high TNF)"]:
-                qdata = valid[valid["tnf_quartile"] == q]
-                q_rows.append([
-                    q, len(qdata),
-                    f"{qdata['mean_thi_tnf'].median():.2f}",
-                    f"{qdata['mean_milk_yield_kg'].median():.1f}",
-                ])
-            result_table(
-                "Milk yield by thermoneutral fraction quartile",
-                ["Quartile", "n", "Median TNF", "Median yield (kg)"],
-                q_rows,
-            )
+                # Per-cow Spearman (within-animal correlation)
+                per_cow_rs = []
+                for aid, cow in valid.groupby("animal_id"):
+                    if len(cow) >= 10:
+                        r, _ = spearmanr(cow["thi_tnf"], cow["relative_yield"])
+                        if np.isfinite(r):
+                            per_cow_rs.append(r)
+                if per_cow_rs:
+                    kv("Per-cow Spearman median (within-animal)",
+                       f"{np.median(per_cow_rs):.3f} [IQR {np.percentile(per_cow_rs, 25):.3f} - "
+                       f"{np.percentile(per_cow_rs, 75):.3f}], n={len(per_cow_rs)} cows")
+
+                # Quartile table
+                valid = valid.copy()
+                valid["tnf_quartile"] = pd.qcut(
+                    valid["thi_tnf"], 4,
+                    labels=["Q1 (low TNF)", "Q2", "Q3", "Q4 (high TNF)"],
+                    duplicates="drop",
+                )
+                q_rows = []
+                for q in ["Q1 (low TNF)", "Q2", "Q3", "Q4 (high TNF)"]:
+                    qdata = valid[valid["tnf_quartile"] == q]
+                    if len(qdata) > 0:
+                        q_rows.append([
+                            q, len(qdata),
+                            f"{qdata['thi_tnf'].median():.2f}",
+                            f"{qdata['daily_yield_kg'].median():.1f}",
+                            f"{qdata['relative_yield'].median():.3f}",
+                        ])
+                if q_rows:
+                    result_table(
+                        "Daily yield by thermoneutral fraction quartile",
+                        ["Quartile", "n days", "Median TNF",
+                         "Median yield (kg)", "Median rel. yield"],
+                        q_rows,
+                    )
+    else:
+        if not daily_yield_path.exists():
+            log.info("  daily_milk_yield.csv not found — re-run digimuh-extract")
 
     # ── 8. Stability ─────────────────────────────────────────
     section("Breakpoint stability", "Repeat animals across years")
