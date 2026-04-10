@@ -1010,9 +1010,10 @@ def plot_derivative_ccf(out_dir: Path) -> None:
 def plot_event_triggered_average(out_dir: Path) -> None:
     """Plot peri-event average of rumen temp around breakpoint crossings.
 
-    Two panels per predictor:
+    Three panels per predictor:
     A) Climate signal (THI or barn temp) aligned to crossing
-    B) Rumen temperature (baseline-subtracted) aligned to crossing
+    B) Rumen temperature centered on each animal's mean (absolute scale)
+    C) Rumen temperature baseline-subtracted (acute onset)
     """
     import matplotlib.pyplot as plt
     _setup()
@@ -1039,7 +1040,7 @@ def plot_event_triggered_average(out_dir: Path) -> None:
         n_events = sub.groupby(["animal_id", "year", "event_id"]).ngroups
         n_animals = sub["animal_id"].nunique()
 
-        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
         # ── Panel A: Climate signal ──────────────────────────
         ax = axes[0]
@@ -1054,29 +1055,52 @@ def plot_event_triggered_average(out_dir: Path) -> None:
                    label="Breakpoint crossing")
         ax.set_xlabel("Time relative to crossing (minutes)")
         ax.set_ylabel(climate_label)
-        ax.set_title(f"{climate_label}\n(n={n_events} events, {n_animals} animals)")
+        ax.set_title(f"(A) {climate_label}\n(n={n_events} events, {n_animals} animals)")
         ax.legend(fontsize=8)
 
-        # ── Panel B: Rumen temperature (baseline-subtracted) ─
+        # ── Panel B: Rumen temp centered on animal mean ──────
         ax = axes[1]
-        agg_bt = sub.groupby("relative_minutes")["body_temp_baseline"].agg(
-            ["mean", "std", "count"])
-        agg_bt["sem"] = agg_bt["std"] / np.sqrt(agg_bt["count"])
+        col_centered = "body_temp_centered"
+        if col_centered not in sub.columns:
+            # Fallback: use raw body_temp
+            col_centered = "body_temp"
 
-        ax.fill_between(agg_bt.index, agg_bt["mean"] - agg_bt["sem"],
-                       agg_bt["mean"] + agg_bt["sem"],
+        agg_raw = sub.groupby("relative_minutes")[col_centered].agg(
+            ["mean", "std", "count"])
+        agg_raw["sem"] = agg_raw["std"] / np.sqrt(agg_raw["count"])
+
+        ax.fill_between(agg_raw.index, agg_raw["mean"] - agg_raw["sem"],
+                       agg_raw["mean"] + agg_raw["sem"],
                        alpha=0.2, color=COLOURS["below_bp"])
-        ax.plot(agg_bt.index, agg_bt["mean"], color=COLOURS["below_bp"], linewidth=2)
+        ax.plot(agg_raw.index, agg_raw["mean"], color=COLOURS["below_bp"], linewidth=2)
+        ax.axvline(0, color="#333", linewidth=1.5, linestyle="--",
+                   label="Breakpoint crossing")
+        ax.axhline(0, color="#999", linewidth=0.5, linestyle="--")
+        ax.set_xlabel("Time relative to crossing (minutes)")
+        ax.set_ylabel("Rumen temp relative to animal mean (°C)")
+        ax.set_title("(B) Rumen temperature\n(centered on animal mean)")
+        ax.legend(fontsize=8)
+
+        # ── Panel C: Rumen temp baseline-subtracted ──────────
+        ax = axes[2]
+        agg_bl = sub.groupby("relative_minutes")["body_temp_baseline"].agg(
+            ["mean", "std", "count"])
+        agg_bl["sem"] = agg_bl["std"] / np.sqrt(agg_bl["count"])
+
+        ax.fill_between(agg_bl.index, agg_bl["mean"] - agg_bl["sem"],
+                       agg_bl["mean"] + agg_bl["sem"],
+                       alpha=0.2, color=COLOURS["below_bp"])
+        ax.plot(agg_bl.index, agg_bl["mean"], color=COLOURS["below_bp"], linewidth=2)
         ax.axvline(0, color="#333", linewidth=1.5, linestyle="--",
                    label="Breakpoint crossing")
         ax.axhline(0, color="#999", linewidth=0.5, linestyle="--")
 
         # Find when body temp first exceeds 2 SEM above baseline
-        post = agg_bt.loc[agg_bt.index >= 0]
+        post = agg_bl.loc[agg_bl.index >= 0]
         onset = post[post["mean"] > 2 * post["sem"].iloc[0]].index
         if len(onset) > 0:
             onset_min = onset[0]
-            onset_val = agg_bt.loc[onset_min, "mean"]
+            onset_val = agg_bl.loc[onset_min, "mean"]
             ax.axvline(onset_min, color=COLOURS["below_bp"], linewidth=1,
                        linestyle=":", alpha=0.7)
             ax.annotate(
@@ -1088,8 +1112,8 @@ def plot_event_triggered_average(out_dir: Path) -> None:
             )
 
         ax.set_xlabel("Time relative to crossing (minutes)")
-        ax.set_ylabel("Rumen temperature change (°C)")
-        ax.set_title(f"Rumen temperature response\n(baseline-subtracted)")
+        ax.set_ylabel("Rumen temp change from pre-event (°C)")
+        ax.set_title("(C) Rumen temperature\n(pre-event baseline subtracted)")
         ax.legend(fontsize=8)
 
         fig.suptitle(f"Event-triggered average: {pred_label}",
