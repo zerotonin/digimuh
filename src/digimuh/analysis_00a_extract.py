@@ -95,6 +95,19 @@ WHERE animal_id = ?
 GROUP BY animal_id
 """
 
+SQL_DAILY_MILK_YIELD = """
+SELECT animal_id,
+       DATE("timestamp") AS date,
+       SUM(herdeplus_milked_mkg) AS daily_yield_kg,
+       COUNT(*)                   AS n_milkings
+FROM herdeplus
+WHERE animal_id = ?
+  AND "timestamp" >= ? AND "timestamp" <= ?
+  AND herdeplus_milked_mkg IS NOT NULL
+  AND herdeplus_milked_mkg > 0
+GROUP BY animal_id, DATE("timestamp")
+"""
+
 SQL_LACTATION_NR = """
 SELECT MAX(CAST(herdeplus_calving_lactation AS INTEGER)) AS lactation_nr
 FROM herdeplus
@@ -300,6 +313,38 @@ def extract_production(con, tierauswahl: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
+def extract_daily_milk_yield(con, tierauswahl: pd.DataFrame) -> pd.DataFrame:
+    """Extract daily milk yield (sum of milkings per day) per animal.
+
+    Each row is one animal-day with the total yield across all milkings
+    that day.  Typically 2-3 milkings per day.
+
+    Args:
+        con: Database connection.
+        tierauswahl: Cleaned Tierauswahl DataFrame.
+
+    Returns:
+        DataFrame with animal_id, year, date, daily_yield_kg, n_milkings.
+    """
+    frames = []
+    for _, row in tierauswahl.iterrows():
+        aid = int(row["animal_id"])
+        enter = str(row["datetime_enter"])[:10]
+        exit_ = str(row["datetime_exit"])[:10]
+        year = int(row["year"]) if pd.notna(row.get("year")) else None
+
+        df = query_df(con, SQL_DAILY_MILK_YIELD, (aid, enter, exit_))
+        if not df.empty:
+            df["year"] = year
+            frames.append(df)
+
+    if not frames:
+        return pd.DataFrame()
+    result = pd.concat(frames, ignore_index=True)
+    result["date"] = pd.to_datetime(result["date"]).dt.date
+    return result
+
+
 def extract_climate(con, tierauswahl: pd.DataFrame) -> pd.DataFrame:
     """Extract daily barn climate for each summer in the dataset."""
     years = sorted(tierauswahl["year"].dropna().unique().astype(int))
@@ -378,6 +423,12 @@ def main() -> None:
     n_milk = prod["mean_milk_yield_kg"].notna().sum()
     n_lac = prod["lactation_nr"].notna().sum()
     log.info("  → %d with milk yield, %d with lactation nr", n_milk, n_lac)
+
+    log.info("Extracting daily milk yield …")
+    daily_yield = extract_daily_milk_yield(con, ta)
+    daily_yield.to_csv(cfg.output / "daily_milk_yield.csv", index=False)
+    log.info("  → %d daily records, %d animals",
+             len(daily_yield), daily_yield["animal_id"].nunique() if not daily_yield.empty else 0)
 
     log.info("Extracting barn climate …")
     climate = extract_climate(con, ta)
