@@ -1009,6 +1009,211 @@ def compute_cross_correlation(
 
 
 # ─────────────────────────────────────────────────────────────
+#  « derivative cross-correlation »
+# ─────────────────────────────────────────────────────────────
+
+def compute_derivative_ccf(
+    rumen: pd.DataFrame, bs_results: pd.DataFrame,
+    max_lag: int = 24,
+) -> pd.DataFrame:
+    """Cross-correlation of rate-of-change signals: dTHI/dt vs dTbody/dt.
+
+    Instead of correlating the raw levels (contaminated by shared
+    diurnal cycle), we correlate the temporal derivatives.  This asks:
+    "when the barn heats up, how long until the cow heats up?"
+
+    The derivative removes DC offsets and slow trends while preserving
+    the temporal coupling of changes.  The rumen's thermal inertia
+    (~100 L) means the derivative response is delayed by 30-90 min.
+
+    Args:
+        rumen: rumen_barn.csv DataFrame.
+        bs_results: broken_stick_results.csv DataFrame.
+        max_lag: Maximum lag in 10-min samples (default 24 = 4 hours).
+
+    Returns:
+        DataFrame with columns: animal_id, year, predictor, region,
+        lag, lag_minutes, dxcorr (normalised CCF of derivatives).
+    """
+    records = []
+
+    for prefix, env_col, conv_col, bp_col in [
+        ("thi", "barn_thi", "thi_converged", "thi_breakpoint"),
+        ("temp", "barn_temp", "temp_converged", "temp_breakpoint"),
+    ]:
+        converged = bs_results[bs_results[conv_col] == True]
+
+        for _, row in converged.iterrows():
+            aid = int(row["animal_id"])
+            year = int(row["year"])
+            bp = row[bp_col]
+
+            grp = rumen[(rumen["animal_id"] == aid) & (rumen["year"] == year)].copy()
+            if len(grp) < 100:
+                continue
+
+            grp = grp.sort_values("timestamp").reset_index(drop=True)
+
+            # Compute derivatives (forward difference)
+            x_full = grp[env_col].values
+            y_full = grp["body_temp"].values
+            dx = np.diff(x_full)
+            dy = np.diff(y_full)
+
+            # Use midpoint climate values for region assignment
+            x_mid = (x_full[:-1] + x_full[1:]) / 2.0
+
+            for region, mask_fn in [
+                ("below", lambda x: x <= bp),
+                ("above", lambda x: x > bp),
+            ]:
+                mask = mask_fn(x_mid)
+                if mask.sum() < max_lag * 3:
+                    continue
+
+                dxr = dx[mask]
+                dyr = dy[mask]
+
+                # Demean
+                dxc = dxr - np.mean(dxr)
+                dyc = dyr - np.mean(dyr)
+
+                sx = np.std(dxr, ddof=1)
+                sy = np.std(dyr, ddof=1)
+                n = len(dxr)
+
+                if sx < 1e-12 or sy < 1e-12:
+                    continue
+
+                for lag in range(-max_lag, max_lag + 1):
+                    if lag >= 0:
+                        x_seg = dxc[:n - lag] if lag > 0 else dxc
+                        y_seg = dyc[lag:] if lag > 0 else dyc
+                    else:
+                        x_seg = dxc[-lag:]
+                        y_seg = dyc[:n + lag]
+
+                    m = len(x_seg)
+                    if m < 10:
+                        continue
+
+                    xcov = np.sum(x_seg * y_seg) / (m - 1)
+                    dxcorr = xcov / (sx * sy)
+
+                    records.append({
+                        "animal_id": aid, "year": year,
+                        "predictor": prefix,
+                        "region": region,
+                        "lag": lag,
+                        "lag_minutes": lag * 10,
+                        "dxcorr": dxcorr,
+                        "n": m,
+                    })
+
+    return pd.DataFrame(records)
+
+
+# ─────────────────────────────────────────────────────────────
+#  « event-triggered average at breakpoint crossing »
+# ─────────────────────────────────────────────────────────────
+
+def compute_event_triggered_average(
+    rumen: pd.DataFrame, bs_results: pd.DataFrame,
+    window: int = 36,
+    min_gap: int = 6,
+) -> pd.DataFrame:
+    """Peri-event average of rumen temperature around THI breakpoint crossings.
+
+    Finds moments when barn THI crosses the animal's breakpoint upward
+    (heat stress onset).  Extracts a window of rumen temperature
+    centred on each crossing event and averages across events.
+
+    Args:
+        rumen: rumen_barn.csv DataFrame.
+        bs_results: broken_stick_results.csv DataFrame.
+        window: Half-window in 10-min samples (default 36 = 6 hours).
+        min_gap: Minimum samples between events to avoid overlap
+            (default 6 = 1 hour).
+
+    Returns:
+        DataFrame with columns: animal_id, year, predictor, event_id,
+        relative_lag (samples from crossing), relative_minutes,
+        body_temp, climate_val.  Also a summary DataFrame.
+    """
+    traces = []
+    summaries = []
+
+    for prefix, env_col, conv_col, bp_col in [
+        ("thi", "barn_thi", "thi_converged", "thi_breakpoint"),
+        ("temp", "barn_temp", "temp_converged", "temp_breakpoint"),
+    ]:
+        converged = bs_results[bs_results[conv_col] == True]
+
+        for _, row in converged.iterrows():
+            aid = int(row["animal_id"])
+            year = int(row["year"])
+            bp = row[bp_col]
+
+            grp = rumen[(rumen["animal_id"] == aid) & (rumen["year"] == year)].copy()
+            if len(grp) < window * 3:
+                continue
+
+            grp = grp.sort_values("timestamp").reset_index(drop=True)
+            x = grp[env_col].values
+            y = grp["body_temp"].values
+            n = len(x)
+
+            # Find upward crossings: x[i] <= bp and x[i+1] > bp
+            below = x[:-1] <= bp
+            above = x[1:] > bp
+            crossings = np.where(below & above)[0]
+
+            if len(crossings) == 0:
+                continue
+
+            # Filter: enforce minimum gap between events
+            filtered = [crossings[0]]
+            for c in crossings[1:]:
+                if c - filtered[-1] >= min_gap:
+                    filtered.append(c)
+            crossings = np.array(filtered)
+
+            # Extract windows around each crossing
+            event_count = 0
+            for c in crossings:
+                start = c - window
+                end = c + window + 1
+                if start < 0 or end > n:
+                    continue
+
+                event_count += 1
+                # Baseline-subtract body temp (mean of pre-event period)
+                pre_mean = np.mean(y[start:c])
+                for j, idx in enumerate(range(start, end)):
+                    traces.append({
+                        "animal_id": aid, "year": year,
+                        "predictor": prefix,
+                        "event_id": event_count,
+                        "relative_lag": j - window,
+                        "relative_minutes": (j - window) * 10,
+                        "body_temp": y[idx],
+                        "body_temp_baseline": y[idx] - pre_mean,
+                        "climate_val": x[idx],
+                    })
+
+            if event_count > 0:
+                summaries.append({
+                    "animal_id": aid, "year": year,
+                    "predictor": prefix,
+                    "n_events": event_count,
+                })
+
+    traces_df = pd.DataFrame(traces)
+    summaries_df = pd.DataFrame(summaries)
+    return traces_df, summaries_df
+
+
+# ─────────────────────────────────────────────────────────────
 #  « breakpoint stability (ICC) »
 # ─────────────────────────────────────────────────────────────
 
@@ -1432,7 +1637,53 @@ def main() -> None:
                 xcorr_rows,
             )
 
-    # ── 7. Thermoneutral fraction vs daily milk yield ────────
+    # ── 6. Derivative cross-correlation ──────────────────────
+    section("Derivative cross-correlation",
+            "d(climate)/dt vs d(body_temp)/dt — temporal coupling of changes")
+    dccf = compute_derivative_ccf(rumen, bs)
+    dccf.to_csv(d / "derivative_ccf.csv", index=False)
+
+    dccf_rows = []
+    for pred in ["thi", "temp"]:
+        for region in ["below", "above"]:
+            sub = dccf[(dccf["predictor"] == pred) & (dccf["region"] == region)]
+            if sub.empty:
+                continue
+            # Find peak lag across animals
+            agg = sub.groupby("lag_minutes")["dxcorr"].mean()
+            peak_lag = agg.idxmax()
+            peak_r = agg.max()
+            lag0_r = agg.get(0, np.nan)
+            dccf_rows.append([
+                pred.upper(), region,
+                sub["animal_id"].nunique(),
+                lag0_r, peak_r, int(peak_lag),
+            ])
+    if dccf_rows:
+        result_table(
+            "Derivative CCF summary",
+            ["Predictor", "Region", "n animals",
+             "r at lag=0", "Peak r", "Peak lag (min)"],
+            dccf_rows,
+        )
+
+    # ── 7. Event-triggered average ───────────────────────────
+    section("Event-triggered average",
+            "Rumen temp aligned to THI breakpoint upward crossings")
+    eta_traces, eta_summary = compute_event_triggered_average(rumen, bs)
+    eta_traces.to_csv(d / "event_triggered_traces.csv", index=False)
+    eta_summary.to_csv(d / "event_triggered_summary.csv", index=False)
+
+    if not eta_summary.empty:
+        for pred in ["thi", "temp"]:
+            psub = eta_summary[eta_summary["predictor"] == pred]
+            if not psub.empty:
+                kv(f"{pred.upper()} crossing events",
+                   f"{psub['n_events'].sum()} events from "
+                   f"{psub['animal_id'].nunique()} animals "
+                   f"(median {psub['n_events'].median():.0f}/animal)")
+
+    # ── 8. Thermoneutral fraction vs daily milk yield ────────
     section("Thermoneutral fraction (TNF)",
             "Daily fraction below breakpoint vs daily milk yield (cow-specific P95)")
     tnf = compute_thermoneutral_fraction(rumen, bs)

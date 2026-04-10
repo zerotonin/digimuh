@@ -868,7 +868,7 @@ def plot_cross_correlation(out_dir: Path) -> None:
                     ax.plot(agg.index, agg["mean"], color=colour, linewidth=2)
                     ax.axhline(0, color="#999", linewidth=0.5, linestyle="--")
                     ax.axvline(0, color="#999", linewidth=1, linestyle="--",
-                               label="Climate change")
+                               label="Lag = 0")
 
                     _annotate_peak(ax, agg, colour)
 
@@ -912,7 +912,7 @@ def plot_cross_correlation(out_dir: Path) -> None:
 
                 ax.axhline(0, color="#999", linewidth=0.5, linestyle="--")
                 ax.axvline(0, color="#999", linewidth=1, linestyle="--",
-                           label="Climate change")
+                           label="Lag = 0")
                 ax.set_xlabel("Lag (minutes)")
                 ax.set_ylabel(ylab)
                 ax.set_title(
@@ -921,6 +921,181 @@ def plot_cross_correlation(out_dir: Path) -> None:
                 ax.legend()
                 fig.tight_layout()
                 _save(fig, f"{fname_suffix}_{pred}_overlay{variant_suffix}", out_dir)
+
+
+# ─────────────────────────────────────────────────────────────
+#  « derivative cross-correlation plots »
+# ─────────────────────────────────────────────────────────────
+
+def plot_derivative_ccf(out_dir: Path) -> None:
+    """Plot derivative CCF: d(climate)/dt vs d(body_temp)/dt."""
+    import matplotlib.pyplot as plt
+    _setup()
+
+    dccf_path = out_dir / "derivative_ccf.csv"
+    if not dccf_path.exists():
+        log.info("  derivative_ccf.csv not found, skipping")
+        return
+
+    dccf = pd.read_csv(dccf_path)
+    if dccf.empty:
+        return
+
+    log.info("  Plotting derivative CCF (%d rows) …", len(dccf))
+
+    def _annotate_peak(ax, agg, colour, y_offset_frac=0.08):
+        """Add vertical peak line + horizontal arrow from lag=0."""
+        peak_lag = agg["mean"].idxmax()
+        peak_val = agg["mean"].max()
+        ylo, yhi = ax.get_ylim()
+        y_range = yhi - ylo
+        arrow_y = peak_val + y_range * y_offset_frac
+
+        if abs(peak_lag) > 5:
+            ax.axvline(peak_lag, color=colour, linewidth=1.2,
+                       linestyle="--", alpha=0.7)
+            ax.annotate(
+                "", xy=(peak_lag, arrow_y), xytext=(0, arrow_y),
+                arrowprops=dict(arrowstyle="<->", color=colour, lw=1.5),
+            )
+            mid_x = peak_lag / 2
+            ax.text(mid_x, arrow_y + y_range * 0.02,
+                    f"rumen temperature\n{abs(peak_lag):.0f} min later",
+                    ha="center", va="bottom", fontsize=8,
+                    color=colour, fontstyle="italic")
+
+    for pred, pred_label in [("thi", "Barn THI"), ("temp", "Barn temperature")]:
+        sub = dccf[dccf["predictor"] == pred]
+        if sub.empty:
+            continue
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        y_offsets = {"below": 0.05, "above": 0.12}
+
+        for region, colour, label in [
+            ("below", COLOURS["below_bp"], "Below breakpoint"),
+            ("above", COLOURS["above_bp"], "Above breakpoint"),
+        ]:
+            rsub = sub[sub["region"] == region]
+            if rsub.empty:
+                continue
+            agg = rsub.groupby("lag_minutes")["dxcorr"].agg(["mean", "std", "count"])
+            agg["sem"] = agg["std"] / np.sqrt(agg["count"])
+
+            ax.fill_between(agg.index, agg["mean"] - agg["sem"],
+                           agg["mean"] + agg["sem"],
+                           alpha=0.15, color=colour)
+            ax.plot(agg.index, agg["mean"], color=colour, linewidth=2,
+                    label=label)
+
+            _annotate_peak(ax, agg, colour, y_offset_frac=y_offsets[region])
+
+        ax.axhline(0, color="#999", linewidth=0.5, linestyle="--")
+        ax.axvline(0, color="#999", linewidth=1, linestyle="--",
+                   label="Lag = 0")
+        ax.set_xlabel("Lag (minutes)")
+        ax.set_ylabel("Cross-correlation of derivatives (r)")
+        ax.set_title(
+            f"Derivative CCF: d({pred_label})/dt vs d(Rumen temp)/dt\n"
+            f"(shaded: ± 1 SEM)")
+        ax.legend()
+        fig.tight_layout()
+        _save(fig, f"dccf_{pred}", out_dir)
+
+
+# ─────────────────────────────────────────────────────────────
+#  « event-triggered average plots »
+# ─────────────────────────────────────────────────────────────
+
+def plot_event_triggered_average(out_dir: Path) -> None:
+    """Plot peri-event average of rumen temp around breakpoint crossings.
+
+    Two panels per predictor:
+    A) Climate signal (THI or barn temp) aligned to crossing
+    B) Rumen temperature (baseline-subtracted) aligned to crossing
+    """
+    import matplotlib.pyplot as plt
+    _setup()
+
+    traces_path = out_dir / "event_triggered_traces.csv"
+    if not traces_path.exists():
+        log.info("  event_triggered_traces.csv not found, skipping")
+        return
+
+    traces = pd.read_csv(traces_path)
+    if traces.empty:
+        return
+
+    log.info("  Plotting event-triggered averages (%d trace points) …", len(traces))
+
+    for pred, pred_label, climate_label in [
+        ("thi", "THI breakpoint crossing", "Barn THI"),
+        ("temp", "Barn temp breakpoint crossing", "Barn temperature (°C)"),
+    ]:
+        sub = traces[traces["predictor"] == pred]
+        if sub.empty:
+            continue
+
+        n_events = sub.groupby(["animal_id", "year", "event_id"]).ngroups
+        n_animals = sub["animal_id"].nunique()
+
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+        # ── Panel A: Climate signal ──────────────────────────
+        ax = axes[0]
+        agg = sub.groupby("relative_minutes")["climate_val"].agg(["mean", "std", "count"])
+        agg["sem"] = agg["std"] / np.sqrt(agg["count"])
+
+        ax.fill_between(agg.index, agg["mean"] - agg["sem"],
+                       agg["mean"] + agg["sem"],
+                       alpha=0.2, color=COLOURS["above_bp"])
+        ax.plot(agg.index, agg["mean"], color=COLOURS["above_bp"], linewidth=2)
+        ax.axvline(0, color="#333", linewidth=1.5, linestyle="--",
+                   label="Breakpoint crossing")
+        ax.set_xlabel("Time relative to crossing (minutes)")
+        ax.set_ylabel(climate_label)
+        ax.set_title(f"{climate_label}\n(n={n_events} events, {n_animals} animals)")
+        ax.legend(fontsize=8)
+
+        # ── Panel B: Rumen temperature (baseline-subtracted) ─
+        ax = axes[1]
+        agg_bt = sub.groupby("relative_minutes")["body_temp_baseline"].agg(
+            ["mean", "std", "count"])
+        agg_bt["sem"] = agg_bt["std"] / np.sqrt(agg_bt["count"])
+
+        ax.fill_between(agg_bt.index, agg_bt["mean"] - agg_bt["sem"],
+                       agg_bt["mean"] + agg_bt["sem"],
+                       alpha=0.2, color=COLOURS["below_bp"])
+        ax.plot(agg_bt.index, agg_bt["mean"], color=COLOURS["below_bp"], linewidth=2)
+        ax.axvline(0, color="#333", linewidth=1.5, linestyle="--",
+                   label="Breakpoint crossing")
+        ax.axhline(0, color="#999", linewidth=0.5, linestyle="--")
+
+        # Find when body temp first exceeds 2 SEM above baseline
+        post = agg_bt.loc[agg_bt.index >= 0]
+        onset = post[post["mean"] > 2 * post["sem"].iloc[0]].index
+        if len(onset) > 0:
+            onset_min = onset[0]
+            onset_val = agg_bt.loc[onset_min, "mean"]
+            ax.axvline(onset_min, color=COLOURS["below_bp"], linewidth=1,
+                       linestyle=":", alpha=0.7)
+            ax.annotate(
+                f"Response onset\n{onset_min:.0f} min",
+                xy=(onset_min, onset_val),
+                xytext=(onset_min + 40, onset_val + 0.02),
+                fontsize=9, color=COLOURS["below_bp"],
+                arrowprops=dict(arrowstyle="->", color=COLOURS["below_bp"], lw=1),
+            )
+
+        ax.set_xlabel("Time relative to crossing (minutes)")
+        ax.set_ylabel("Rumen temperature change (°C)")
+        ax.set_title(f"Rumen temperature response\n(baseline-subtracted)")
+        ax.legend(fontsize=8)
+
+        fig.suptitle(f"Event-triggered average: {pred_label}",
+                     fontsize=13, fontweight="bold")
+        fig.tight_layout()
+        _save(fig, f"eta_{pred}", out_dir)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1375,6 +1550,8 @@ def main() -> None:
         ("Body temp vs resp scatter", lambda: plot_bodytemp_vs_resp_scatter(bs, d)),
         ("Diagnostic examples", lambda: plot_examples(rumen, resp, bs, d)),
         ("Cross-correlation", lambda: plot_cross_correlation(d)),
+        ("Derivative CCF", lambda: plot_derivative_ccf(d)),
+        ("Event-triggered average", lambda: plot_event_triggered_average(d)),
         ("TNF vs yield", lambda: plot_tnf_yield(d)),
         ("Longitudinal breakpoints", lambda: plot_longitudinal_breakpoints(bs, d)),
         ("Sankey diagrams", lambda: plot_threshold_sankey(bs, d)),
