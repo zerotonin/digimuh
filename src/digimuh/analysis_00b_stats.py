@@ -935,9 +935,19 @@ def compute_cross_correlation(
 
             # Sort by timestamp for temporal lag analysis
             grp = grp.sort_values("timestamp").reset_index(drop=True)
+            grp["_date"] = pd.to_datetime(grp["timestamp"]).dt.date
 
             x_full = grp[env_col].values
             y_full = grp["body_temp"].values
+
+            # Detrended versions: subtract per-day mean to remove
+            # 24h diurnal cycle (shared periodicity → sinusoidal CCF)
+            x_detrended = np.empty_like(x_full)
+            y_detrended = np.empty_like(y_full)
+            for date_val, day_idx in grp.groupby("_date").groups.items():
+                idx = day_idx.values
+                x_detrended[idx] = x_full[idx] - np.mean(x_full[idx])
+                y_detrended[idx] = y_full[idx] - np.mean(y_full[idx])
 
             for region, mask_fn in [
                 ("below", lambda x: x <= bp),
@@ -947,47 +957,53 @@ def compute_cross_correlation(
                 if mask.sum() < max_lag * 3:
                     continue
 
-                x = x_full[mask]
-                y = y_full[mask]
+                # Run both raw and detrended
+                for variant, xv, yv in [
+                    ("raw", x_full[mask], y_full[mask]),
+                    ("detrended", x_detrended[mask], y_detrended[mask]),
+                ]:
+                    x = xv
+                    y = yv
 
-                # Demean
-                xc = x - np.mean(x)
-                yc = y - np.mean(y)
+                    # Demean (global, on top of per-day for detrended)
+                    xc = x - np.mean(x)
+                    yc = y - np.mean(y)
 
-                sx = np.std(x, ddof=1)
-                sy = np.std(y, ddof=1)
-                n = len(x)
+                    sx = np.std(x, ddof=1)
+                    sy = np.std(y, ddof=1)
+                    n = len(x)
 
-                if sx < 1e-10 or sy < 1e-10:
-                    continue
-
-                for lag in range(-max_lag, max_lag + 1):
-                    if lag >= 0:
-                        x_seg = xc[:n - lag] if lag > 0 else xc
-                        y_seg = yc[lag:] if lag > 0 else yc
-                    else:
-                        x_seg = xc[-lag:]
-                        y_seg = yc[:n + lag]
-
-                    m = len(x_seg)
-                    if m < 10:
+                    if sx < 1e-10 or sy < 1e-10:
                         continue
 
-                    # Cross-covariance (raw)
-                    xcov = np.sum(x_seg * y_seg) / (m - 1)
-                    # Normalised cross-correlation
-                    xcorr = xcov / (sx * sy)
+                    for lag in range(-max_lag, max_lag + 1):
+                        if lag >= 0:
+                            x_seg = xc[:n - lag] if lag > 0 else xc
+                            y_seg = yc[lag:] if lag > 0 else yc
+                        else:
+                            x_seg = xc[-lag:]
+                            y_seg = yc[:n + lag]
 
-                    records.append({
-                        "animal_id": aid, "year": year,
-                        "predictor": prefix,
-                        "region": region,
-                        "lag": lag,
-                        "lag_minutes": lag * 10,
-                        "xcorr": xcorr,
-                        "xcov": xcov,
-                        "n": m,
-                    })
+                        m = len(x_seg)
+                        if m < 10:
+                            continue
+
+                        # Cross-covariance (raw)
+                        xcov = np.sum(x_seg * y_seg) / (m - 1)
+                        # Normalised cross-correlation
+                        xcorr = xcov / (sx * sy)
+
+                        records.append({
+                            "animal_id": aid, "year": year,
+                            "predictor": prefix,
+                            "region": region,
+                            "variant": variant,
+                            "lag": lag,
+                            "lag_minutes": lag * 10,
+                            "xcorr": xcorr,
+                            "xcov": xcov,
+                            "n": m,
+                        })
 
     return pd.DataFrame(records)
 
@@ -1388,30 +1404,33 @@ def main() -> None:
 
     # ── 5. Cross-correlation ─────────────────────────────────
     section("Cross-correlation",
-            "Climate vs rumen temp, below/above breakpoint (SEM bands)")
+            "Climate vs rumen temp, below/above breakpoint\n"
+            "Raw = includes 24h diurnal cycle; Detrended = per-day mean removed")
     xcorr = compute_cross_correlation(rumen, bs)
     xcorr.to_csv(d / "cross_correlation.csv", index=False)
 
-    xcorr_rows = []
-    for pred in ["thi", "temp"]:
-        for region in ["below", "above"]:
-            sub = xcorr[(xcorr["predictor"] == pred) & (xcorr["region"] == region)
-                        & (xcorr["lag"] == 0)]
-            if not sub.empty:
-                xcorr_rows.append([
-                    pred.upper(), region,
-                    sub["animal_id"].nunique(),
-                    sub["xcorr"].median(),
-                    sub["xcorr"].quantile(0.25),
-                    sub["xcorr"].quantile(0.75),
-                ])
-    if xcorr_rows:
-        result_table(
-            "Cross-correlation at lag 0 (median [IQR])",
-            ["Predictor", "Region", "n animals",
-             "Median r", "Q25", "Q75"],
-            xcorr_rows,
-        )
+    for variant, variant_label in [("raw", "Raw"), ("detrended", "Detrended (diurnal removed)")]:
+        xcorr_rows = []
+        vsub = xcorr[xcorr["variant"] == variant] if "variant" in xcorr.columns else xcorr
+        for pred in ["thi", "temp"]:
+            for region in ["below", "above"]:
+                sub = vsub[(vsub["predictor"] == pred) & (vsub["region"] == region)
+                           & (vsub["lag"] == 0)]
+                if not sub.empty:
+                    xcorr_rows.append([
+                        pred.upper(), region,
+                        sub["animal_id"].nunique(),
+                        sub["xcorr"].median(),
+                        sub["xcorr"].quantile(0.25),
+                        sub["xcorr"].quantile(0.75),
+                    ])
+        if xcorr_rows:
+            result_table(
+                f"Cross-correlation at lag 0 — {variant_label}",
+                ["Predictor", "Region", "n animals",
+                 "Median r", "Q25", "Q75"],
+                xcorr_rows,
+            )
 
     # ── 7. Thermoneutral fraction vs daily milk yield ────────
     section("Thermoneutral fraction (TNF)",
@@ -1456,13 +1475,28 @@ def main() -> None:
 
                 # Quartile table
                 valid = valid.copy()
-                valid["tnf_quartile"] = pd.qcut(
-                    valid["thi_tnf"], 4,
-                    labels=["Q1 (low TNF)", "Q2", "Q3", "Q4 (high TNF)"],
-                    duplicates="drop",
-                )
+                try:
+                    valid["tnf_quartile"] = pd.qcut(
+                        valid["thi_tnf"], 4, duplicates="drop",
+                    )
+                    n_bins = valid["tnf_quartile"].nunique()
+                    # Rename bins to readable labels
+                    bin_labels = {cat: f"Q{i+1}" for i, cat in
+                                  enumerate(sorted(valid["tnf_quartile"].dropna().unique()))}
+                    if n_bins >= 2:
+                        first = sorted(bin_labels.keys())[0]
+                        last = sorted(bin_labels.keys())[-1]
+                        bin_labels[first] = f"Q1 (low TNF)"
+                        bin_labels[last] = f"Q{n_bins} (high TNF)"
+                    valid["tnf_quartile"] = valid["tnf_quartile"].map(bin_labels)
+                except ValueError:
+                    # Fallback: median split
+                    med = valid["thi_tnf"].median()
+                    valid["tnf_quartile"] = np.where(
+                        valid["thi_tnf"] <= med, "Below median TNF", "Above median TNF")
+
                 q_rows = []
-                for q in ["Q1 (low TNF)", "Q2", "Q3", "Q4 (high TNF)"]:
+                for q in sorted(valid["tnf_quartile"].dropna().unique()):
                     qdata = valid[valid["tnf_quartile"] == q]
                     if len(qdata) > 0:
                         q_rows.append([
@@ -1478,6 +1512,48 @@ def main() -> None:
                          "Median yield (kg)", "Median rel. yield"],
                         q_rows,
                     )
+
+                # ── Heat stress days only ─────────────────────────
+                # Restrict to days where the cow actually experienced
+                # some time above her breakpoint (TNF < threshold)
+                kv("", "")  # spacer
+                kv("Heat stress days only", "(TNF < threshold)")
+
+                hs_rows = []
+                for threshold in [0.95, 0.90, 0.80, 0.70]:
+                    stressed = valid[valid["thi_tnf"] < threshold]
+                    n_days = len(stressed)
+                    n_cows = stressed["animal_id"].nunique()
+                    if n_days < 20:
+                        hs_rows.append([
+                            f"< {threshold:.2f}", n_days, n_cows,
+                            "", "", "", "",
+                        ])
+                        continue
+
+                    rs_hs, p_hs = spearmanr(stressed["thi_tnf"],
+                                            stressed["relative_yield"])
+                    # Per-cow within-animal (stressed days only)
+                    cow_rs_hs = []
+                    for aid, cow in stressed.groupby("animal_id"):
+                        if len(cow) >= 5:
+                            r, _ = spearmanr(cow["thi_tnf"], cow["relative_yield"])
+                            if np.isfinite(r):
+                                cow_rs_hs.append(r)
+
+                    hs_rows.append([
+                        f"< {threshold:.2f}", n_days, n_cows,
+                        f"{rs_hs:.3f}", f"{p_hs:.2e}",
+                        f"{np.median(cow_rs_hs):.3f}" if cow_rs_hs else "",
+                        len(cow_rs_hs),
+                    ])
+
+                result_table(
+                    "TNF vs relative yield — heat stress days only",
+                    ["TNF thresh", "n days", "n cows",
+                     "Pooled rs", "p", "Per-cow rs", "n cows (rs)"],
+                    hs_rows,
+                )
     else:
         if not daily_yield_path.exists():
             log.info("  daily_milk_yield.csv not found — re-run digimuh-extract")
