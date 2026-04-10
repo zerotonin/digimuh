@@ -134,11 +134,45 @@ Per-animal Spearman rs between each signal and each predictor.
 
 ### 3.6 Below/above breakpoint comparison
 
-For converged animals: within-year Wilcoxon signed-rank tests on
-paired per-animal means below vs above the individual THI breakpoint.
-BH-FDR corrected across all tests within a year.
+For converged animals: within-year Fisher resampling tests (from the
+reRandomStats package, Geurten 2026) on per-animal means below vs above
+the individual THI breakpoint.  The test statistic is the median
+difference, with 20,000 permutations.  BH-FDR corrected across all
+tests within a year.
 
-### 3.7 Breakpoint stability
+The Fisher resampling test is a permutation-based two-sample test that
+makes no distributional assumptions, making it more appropriate than the
+Wilcoxon signed-rank test for our data where sample sizes vary greatly
+between years and normality cannot be assumed.
+
+**Reference:**
+Geurten BRH (2026) reRandomStats: Re-randomisation Statistics Toolkit.
+https://github.com/zerotonin/rerandomstats
+
+### 3.7 Cross-correlation and cross-covariance below/above breakpoint
+
+For each animal with a converged breakpoint, the time series is split
+into readings below and above the breakpoint.  For each region, the
+normalised cross-correlation function (CCF) and raw cross-covariance
+are computed between the climate predictor (THI or barn temperature)
+and rumen temperature at lags from -120 to +120 minutes (in 10-minute
+steps matching the sensor sampling interval).
+
+Positive lags mean the climate signal leads the rumen temperature
+response.  This characterises how quickly the cow's thermoregulatory
+system responds to environmental changes, and whether the coupling
+strength differs between the thermoneutral zone (below breakpoint)
+and the heat stress zone (above breakpoint).
+
+Expected pattern: below the breakpoint, cross-correlation at lag 0
+should be weak (homeostatic regulation buffers the signal).  Above the
+breakpoint, cross-correlation should be stronger and may show a time
+lag of 30-60 minutes (the thermal inertia of the rumen).
+
+**Output:** `cross_correlation.csv` with columns: animal_id, year,
+predictor, region, lag, lag_minutes, xcorr, xcov, n.
+
+### 3.8 Breakpoint stability
 
 ICC for repeat animals appearing in multiple years.
 
@@ -171,7 +205,8 @@ results/broken_stick/
 │                               Hill EC50/n/lower_bend, convergence flags
 ├── spearman_correlations.csv
 ├── behavioural_response.csv
-├── statistical_tests.csv       Wilcoxon tests with BH-FDR
+├── statistical_tests.csv       Fisher resampling tests with BH-FDR
+├── cross_correlation.csv       CCF and cross-covariance below/above bp
 ├── breakpoint_stability.csv
 ├── summary_table.csv
 └── *.svg / *.png               All figures
@@ -181,15 +216,18 @@ results/broken_stick/
 ## 6. Running the pipeline
 
 ```bash
-# Step 1: extract (slow, ~2 min)
-digimuh-extract --db ~/cow.db --tierauswahl Tierauswahl.xlsx \
-    --out results/broken_stick --smaxtec-drink-correction
-
-# Step 2: stats (fast)
+# Full pipeline (rumen temp + respiration)
+digimuh-extract
 digimuh-stats --data results/broken_stick
-
-# Step 3: plots (fast)
 digimuh-plots --data results/broken_stick
+
+# Frontiers paper (rumen temperature only, no respiration)
+digimuh-stats --data results/broken_stick --no-resp
+digimuh-plots --data results/broken_stick
+
+# Or via the run script
+bash scripts/run_00_broken_stick_ana.sh
+bash scripts/run_00_broken_stick_ana.sh --no-resp
 ```
 
 

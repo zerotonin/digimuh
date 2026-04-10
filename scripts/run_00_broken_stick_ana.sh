@@ -6,17 +6,24 @@
 # ║                                                              ║
 # ║  Usage:                                                      ║
 # ║    bash scripts/run_00_broken_stick_ana.sh                   ║
+# ║    bash scripts/run_00_broken_stick_ana.sh --no-resp          ║
 # ║    bash scripts/run_00_broken_stick_ana.sh --tierauswahl X.xlsx  ║
 # ╚══════════════════════════════════════════════════════════════╝
 
 set -e
 
 # Step 1: extract (slow, hits DB)
-# All paths come from config; pass any extra CLI args through
 digimuh-extract "$@"
 
 # Step 2: stats (fast, reads CSVs)
-digimuh-stats --data results/broken_stick
+# Pass --no-resp if present in args
+NO_RESP=""
+for arg in "$@"; do
+    if [ "$arg" = "--no-resp" ]; then
+        NO_RESP="--no-resp"
+    fi
+done
+digimuh-stats --data results/broken_stick $NO_RESP
 
 # Step 3: plots (fast, reads CSVs)
 digimuh-plots --data results/broken_stick
