@@ -12,12 +12,15 @@
 
 set -e
 
-# Separate --no-resp from other args (extract doesn't know --no-resp)
+# Separate stats-only flags from extract args
 NO_RESP=""
+FRONTIERS=""
 EXTRACT_ARGS=()
 for arg in "$@"; do
     if [ "$arg" = "--no-resp" ]; then
         NO_RESP="--no-resp"
+    elif [ "$arg" = "--frontiers" ]; then
+        FRONTIERS="--frontiers"
     else
         EXTRACT_ARGS+=("$arg")
     fi
@@ -27,7 +30,7 @@ done
 digimuh-extract "${EXTRACT_ARGS[@]}"
 
 # Step 2: stats (fast, reads CSVs)
-digimuh-stats --data results/broken_stick $NO_RESP
+digimuh-stats --data results/broken_stick $NO_RESP $FRONTIERS
 
 # Step 3: plots (fast, reads CSVs)
 digimuh-plots --data results/broken_stick
