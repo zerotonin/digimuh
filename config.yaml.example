@@ -1,0 +1,19 @@
+# DigiMuh configuration template
+# Copy to ~/.config/digimuh/config.yaml and edit for your machine.
+# Or run:  digimuh-config
+
+# Path to the SQLite database
+database: ~/cow.db
+
+# Default output directory for analysis results
+output: results/broken_stick
+
+# Path to the animal selection spreadsheet
+tierauswahl: Tierauswahl_extended.xlsx
+
+# Number of parallel workers (set to physical cores minus 4)
+# i9-13900: 20, Ryzen 5950X: 12, laptop: 4
+n_jobs: 20
+
+# Use only smaXtec's built-in drink correction (true/false)
+smaxtec_drink_correction: false
