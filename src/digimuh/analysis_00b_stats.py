@@ -1053,6 +1053,11 @@ def make_summary_table(bs: pd.DataFrame) -> pd.DataFrame:
 # ─────────────────────────────────────────────────────────────
 
 def main() -> None:
+    from digimuh.console import (
+        setup_logging, banner, section, result_table, kv, stars_styled,
+        progress, done, reset_steps,
+    )
+
     parser = argparse.ArgumentParser(description="Statistical analysis for broken-stick")
     parser.add_argument("--data", type=Path, required=True,
                         help="Directory with CSVs from extraction step")
@@ -1061,28 +1066,25 @@ def main() -> None:
                              "rumen temperature only)")
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s │ %(name)-20s │ %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    setup_logging()
+    reset_steps()
     d = args.data
 
-    log.info("Loading extracted CSVs from %s …", d)
+    banner("Broken-stick statistical analysis")
+
+    log.info("Loading CSVs from %s", d)
     rumen = pd.read_csv(d / "rumen_barn.csv")
     resp_path = d / "respiration_barn.csv"
     if args.no_resp:
         resp = pd.DataFrame()
-        log.info("  Respiration analysis SKIPPED (--no-resp)")
+        log.info("Respiration analysis SKIPPED (--no-resp)")
     else:
         resp = pd.read_csv(resp_path) if resp_path.exists() else pd.DataFrame()
     prod = pd.read_csv(d / "production.csv") if (d / "production.csv").exists() else pd.DataFrame()
 
-    # 1. Broken-stick + Davies/pscore + Hill fits
-    log.info("═" * 50)
-    log.info("1. Broken-stick + Hill fits …")
+    # ── 1. Model fitting ─────────────────────────────────────
+    section("Model fitting", "Broken-stick, Davies/pscore, Hill (4PL)")
     bs = run_broken_stick_fits(rumen, resp)
-    # Merge production data
     if not prod.empty:
         bs = bs.merge(
             prod[["animal_id", "year", "mean_milk_yield_kg", "lactation_nr"]],
@@ -1090,113 +1092,130 @@ def main() -> None:
         )
     bs.to_csv(d / "broken_stick_results.csv", index=False)
 
-    prefixes = [("thi", "THI→body"), ("temp", "Temp→body")]
+    prefixes = [("thi", "THI > body temp"), ("temp", "Barn temp > body temp")]
     if not args.no_resp:
-        prefixes += [("resp_thi", "THI→resp"), ("resp_temp", "Temp→resp")]
+        prefixes += [("resp_thi", "THI > resp"), ("resp_temp", "Barn temp > resp")]
 
+    conv_rows = []
     for prefix, label in prefixes:
         n_conv = (bs[f"{prefix}_converged"] == True).sum()
-        log.info("  %s: %d/%d converged", label, n_conv, len(bs))
-
-    # Breakpoint existence test summary
-    log.info("─" * 50)
-    log.info("  Breakpoint existence tests (p < 0.05):")
-    for prefix, label in prefixes:
         davies_col = f"{prefix}_davies_p"
         pscore_col = f"{prefix}_pscore_p"
-        if davies_col not in bs.columns:
-            continue
-        n_valid = bs[davies_col].notna().sum()
-        if n_valid == 0:
-            continue
-        n_davies_sig = (bs[davies_col] < 0.05).sum()
-        n_pscore_sig = (bs[pscore_col] < 0.05).sum()
-        log.info(
-            "  %s: Davies %d/%d (%.0f%%), pscore %d/%d (%.0f%%)",
-            label, n_davies_sig, n_valid, 100 * n_davies_sig / n_valid,
-            n_pscore_sig, n_valid, 100 * n_pscore_sig / n_valid,
-        )
+        hill_col = f"{prefix}_hill_converged"
+        hill_bend = f"{prefix}_hill_bend"
 
-    # Hill fit summary
-    log.info("─" * 50)
-    log.info("  Hill (4PL) fits — lower bend point (Sebaugh & McCray 2003):")
+        n_davies = (bs[davies_col] < 0.05).sum() if davies_col in bs.columns else 0
+        n_pscore = (bs[pscore_col] < 0.05).sum() if pscore_col in bs.columns else 0
+        n_hill = (bs[hill_col] == True).sum() if hill_col in bs.columns else 0
+        n_bend = bs.loc[bs.get(hill_col, pd.Series(dtype=bool)) == True, hill_bend].notna().sum() if hill_col in bs.columns else 0
+
+        conv_rows.append([
+            label, len(bs),
+            f"{n_davies} ({100*n_davies/len(bs):.0f}%)",
+            f"{n_pscore} ({100*n_pscore/len(bs):.0f}%)",
+            f"{n_conv} ({100*n_conv/len(bs):.0f}%)",
+            f"{n_hill} ({100*n_hill/len(bs):.0f}%)",
+            n_bend,
+        ])
+
+    result_table(
+        "Model convergence",
+        ["Model", "n", "Davies p<.05", "Pscore p<.05",
+         "BS converged", "Hill converged", "Bend valid"],
+        conv_rows,
+    )
+
     for prefix, label in prefixes:
-        hill_conv_col = f"{prefix}_hill_converged"
+        hill_col = f"{prefix}_hill_converged"
         hill_bend_col = f"{prefix}_hill_bend"
-        if hill_conv_col not in bs.columns:
+        if hill_col not in bs.columns:
             continue
-        n_hill_conv = (bs[hill_conv_col] == True).sum()
-        bends = bs.loc[bs[hill_conv_col] == True, hill_bend_col].dropna()
-        n_bend_valid = len(bends)
-        if n_bend_valid > 0:
-            log.info(
-                "  %s: converged %d/%d (%.0f%%), bend valid %d, "
-                "median bend=%.1f [IQR %.1f–%.1f]",
-                label, n_hill_conv, len(bs), 100 * n_hill_conv / len(bs),
-                n_bend_valid, bends.median(), bends.quantile(0.25),
-                bends.quantile(0.75),
-            )
-        else:
-            log.info("  %s: converged %d/%d (%.0f%%), no valid bend points",
-                     label, n_hill_conv, len(bs), 100 * n_hill_conv / len(bs))
+        bends = bs.loc[bs[hill_col] == True, hill_bend_col].dropna()
+        if len(bends) > 0:
+            kv(f"{label} Hill bend median [IQR]",
+               f"{bends.median():.1f} [{bends.quantile(0.25):.1f} - {bends.quantile(0.75):.1f}]")
 
-    # 2. Spearman correlations
-    log.info("═" * 50)
-    log.info("2. Spearman correlations …")
+    # ── 2. Spearman ──────────────────────────────────────────
+    section("Spearman correlations")
     spearman = compute_spearman(rumen, resp)
     spearman.to_csv(d / "spearman_correlations.csv", index=False)
-    log.info("  Body temp vs THI: median rₛ = %.3f", spearman["thi_rs"].median())
-    log.info("  Body temp vs barn temp: median rₛ = %.3f", spearman["temp_rs"].median())
+    kv("Body temp vs THI median rs", f"{spearman['thi_rs'].median():.3f}")
+    kv("Body temp vs barn temp median rs", f"{spearman['temp_rs'].median():.3f}")
 
-    # 3. Below/above breakpoint
-    log.info("═" * 50)
-    log.info("3. Below/above breakpoint comparisons …")
+    # ── 3. Below/above ───────────────────────────────────────
+    section("Below/above breakpoint",
+            "Per-animal means split at individual THI breakpoint")
     beh = compute_below_above(rumen, resp, bs)
     beh.to_csv(d / "behavioural_response.csv", index=False)
-    log.info("  %d animals with paired data", len(beh))
+    kv("Animals with paired data", len(beh))
 
-    # 4. Fisher resampling tests with BH-FDR
-    log.info("═" * 50)
-    log.info("4. Fisher resampling tests (reRandomStats, BH-FDR corrected) …")
+    # ── 4. Fisher resampling tests ───────────────────────────
+    section("Statistical tests",
+            "Fisher resampling (reRandomStats), BH-FDR corrected")
     tests = run_statistical_tests(beh)
     tests.to_csv(d / "statistical_tests.csv", index=False)
-    for _, t in tests.iterrows():
-        log.info(
-            "  %d | %-45s | n=%3d | p_raw=%.4f | p_adj=%.4f | %s",
-            t["year"], t["test"], t["n"], t["p_raw"], t["p_adj"], t["stars"],
+
+    if not tests.empty:
+        test_rows = []
+        for _, t in tests.iterrows():
+            test_rows.append([
+                int(t["year"]),
+                t["test"].replace(" (Fisher medianDiff)", ""),
+                int(t["n"]),
+                t["p_raw"],
+                t["p_adj"],
+                stars_styled(t["stars"]),
+                t["median_diff"],
+            ])
+        result_table(
+            "Within-year tests (BH-FDR corrected)",
+            ["Year", "Test", "n", "p raw", "p adj", "Sig.", "Median diff"],
+            test_rows,
+            highlight_col=5,
         )
 
-    # 5. Cross-correlation / cross-covariance below/above breakpoint
-    log.info("═" * 50)
-    log.info("5. Cross-correlation below/above breakpoint …")
+    # ── 5. Cross-correlation ─────────────────────────────────
+    section("Cross-correlation",
+            "Climate vs rumen temp, below/above breakpoint")
     xcorr = compute_cross_correlation(rumen, bs)
     xcorr.to_csv(d / "cross_correlation.csv", index=False)
+
+    xcorr_rows = []
     for pred in ["thi", "temp"]:
         for region in ["below", "above"]:
             sub = xcorr[(xcorr["predictor"] == pred) & (xcorr["region"] == region)
                         & (xcorr["lag"] == 0)]
             if not sub.empty:
-                log.info("  %s %s bp: median r(lag=0) = %.3f, n=%d animals",
-                         pred.upper(), region, sub["xcorr"].median(),
-                         sub["animal_id"].nunique())
+                xcorr_rows.append([
+                    pred.upper(), region,
+                    sub["animal_id"].nunique(),
+                    sub["xcorr"].median(),
+                    sub["xcorr"].quantile(0.25),
+                    sub["xcorr"].quantile(0.75),
+                ])
+    if xcorr_rows:
+        result_table(
+            "Cross-correlation at lag 0 (median [IQR])",
+            ["Predictor", "Region", "n animals",
+             "Median r", "Q25", "Q75"],
+            xcorr_rows,
+        )
 
-    # 6. Breakpoint stability
-    log.info("═" * 50)
-    log.info("6. Breakpoint stability (repeat animals) …")
+    # ── 6. Stability ─────────────────────────────────────────
+    section("Breakpoint stability", "Repeat animals across years")
     pairs, icc = compute_stability(bs)
     if not pairs.empty:
         pairs.to_csv(d / "breakpoint_stability.csv", index=False)
-    log.info("  ICC = %.3f, %d pairs from %d animals",
-             icc, len(pairs), pairs["animal_id"].nunique() if not pairs.empty else 0)
+    kv("ICC", f"{icc:.3f}")
+    kv("Pairs", len(pairs))
+    kv("Unique animals", pairs["animal_id"].nunique() if not pairs.empty else 0)
 
-    # 7. Summary table
-    log.info("═" * 50)
-    log.info("7. Summary table …")
+    # ── 7. Summary ───────────────────────────────────────────
+    section("Summary table")
     summary = make_summary_table(bs)
     summary.to_csv(d / "summary_table.csv", index=False)
 
-    log.info("═" * 50)
-    log.info("All statistics complete.")
+    done(f"All statistics complete. Output in: {d}")
 
 
 if __name__ == "__main__":

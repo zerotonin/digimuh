@@ -12,17 +12,21 @@
 
 set -e
 
-# Step 1: extract (slow, hits DB)
-digimuh-extract "$@"
-
-# Step 2: stats (fast, reads CSVs)
-# Pass --no-resp if present in args
+# Separate --no-resp from other args (extract doesn't know --no-resp)
 NO_RESP=""
+EXTRACT_ARGS=()
 for arg in "$@"; do
     if [ "$arg" = "--no-resp" ]; then
         NO_RESP="--no-resp"
+    else
+        EXTRACT_ARGS+=("$arg")
     fi
 done
+
+# Step 1: extract (slow, hits DB)
+digimuh-extract "${EXTRACT_ARGS[@]}"
+
+# Step 2: stats (fast, reads CSVs)
 digimuh-stats --data results/broken_stick $NO_RESP
 
 # Step 3: plots (fast, reads CSVs)

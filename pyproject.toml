@@ -41,6 +41,7 @@ analysis = [
     "kaleido",
     "openpyxl",
     "pyyaml",
+    "rich",
 ]
 dev = [
     "pytest >= 7.0",
