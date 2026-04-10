@@ -202,7 +202,7 @@ def davies_test(
         except np.linalg.LinAlgError:
             continue
 
-        se_delta = np.sqrt(sigma2 * XtX_inv[2, 2])
+        se_delta = np.sqrt(max(sigma2 * XtX_inv[2, 2], 0.0))
         if se_delta <= 0:
             continue
 
@@ -325,7 +325,7 @@ def pscore_test(
     except np.linalg.LinAlgError:
         return {"p_value": np.nan, "t_statistic": np.nan, "n": n}
 
-    se_gamma = np.sqrt(sigma2 * XtX_inv[2, 2])
+    se_gamma = np.sqrt(max(sigma2 * XtX_inv[2, 2], 0.0))
     if se_gamma <= 0:
         return {"p_value": np.nan, "t_statistic": np.nan, "n": n}
 
@@ -345,7 +345,7 @@ def pscore_test(
             r = y - yh
             s2 = np.sum(r ** 2) / (n - 3)
             inv_xx = np.linalg.inv(Xd.T @ Xd)
-            se = np.sqrt(s2 * inv_xx[2, 2])
+            se = np.sqrt(max(s2 * inv_xx[2, 2], 0.0))
             if se > 0 and abs(b[2] / se) > abs(best_t):
                 best_t = b[2] / se
                 best_psi = psi
@@ -555,9 +555,15 @@ def run_broken_stick_fits(
     groups = rumen.groupby(["animal_id", "year", "date_enter"])
     total = len(groups)
 
-    for i, ((aid, year, enter), grp) in enumerate(groups):
-        if (i + 1) % 20 == 0 or i == 0:
-            log.info("  [%d/%d] Fitting animal %d (%s)", i + 1, total, aid, year)
+    try:
+        from tqdm import tqdm
+        iterator = tqdm(groups, desc="  Fitting animals", total=total,
+                        bar_format="  {l_bar}{bar:30}{r_bar}")
+    except ImportError:
+        iterator = groups
+        log.info("  Fitting %d animal-years …", total)
+
+    for (aid, year, enter), grp in iterator:
 
         n_readings = len(grp)
         if n_readings < 50:
