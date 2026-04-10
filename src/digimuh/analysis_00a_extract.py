@@ -318,16 +318,19 @@ def extract_climate(con, tierauswahl: pd.DataFrame) -> pd.DataFrame:
 # ─────────────────────────────────────────────────────────────
 
 def main() -> None:
+    from digimuh.config import load_config, print_config
+
     parser = argparse.ArgumentParser(description="Extract data for broken-stick analysis")
-    parser.add_argument("--db", type=Path, required=True)
-    parser.add_argument("--tierauswahl", type=Path, required=True)
-    parser.add_argument("--out", type=Path, default=Path("results/broken_stick"))
+    parser.add_argument("--db", type=Path, default=None,
+                        help="Path to cow.db (default: from config)")
+    parser.add_argument("--tierauswahl", type=Path, default=None,
+                        help="Path to Tierauswahl.xlsx (default: from config)")
+    parser.add_argument("--out", type=Path, default=None,
+                        help="Output directory (default: from config)")
     parser.add_argument(
-        "--smaxtec-drink-correction", action="store_true",
+        "--smaxtec-drink-correction", action="store_true", default=None,
         help="Use only smaXtec's built-in temp_without_drink_cycles "
-             "correction for drinking events.  Default behaviour applies "
-             "an additional 15-min post-drinking exclusion window on top "
-             "of smaXtec's correction to remove residual recovery artifacts.",
+             "correction for drinking events.",
     )
     args = parser.parse_args()
 
@@ -336,44 +339,53 @@ def main() -> None:
         format="%(asctime)s │ %(name)-20s │ %(message)s",
         datefmt="%H:%M:%S",
     )
-    args.out.mkdir(parents=True, exist_ok=True)
 
-    exclude_drinking = not args.smaxtec_drink_correction
+    cfg = load_config(args)
+    print_config(cfg)
+
+    if cfg.database is None:
+        parser.error("--db is required (or set 'database' in config)")
+    if cfg.tierauswahl is None:
+        parser.error("--tierauswahl is required (or set 'tierauswahl' in config)")
+
+    cfg.output.mkdir(parents=True, exist_ok=True)
+
+    exclude_drinking = not cfg.smaxtec_drink_correction
     log.info("Drink correction: %s",
              "smaXtec only (temp_without_drink_cycles)"
              if not exclude_drinking
              else "smaXtec + 15-min post-drinking exclusion window")
 
-    con = connect_db(args.db)
-    ta = load_tierauswahl(args.tierauswahl)
-    ta.to_csv(args.out / "tierauswahl.csv", index=False)
+    con = connect_db(cfg.database)
+    ta = load_tierauswahl(cfg.tierauswahl)
+    ta.to_csv(cfg.output / "tierauswahl.csv", index=False)
     log.info("Tierauswahl: %d entries, years %s",
              len(ta), sorted(ta["year"].dropna().unique().astype(int)))
 
     log.info("Extracting rumen + barn data …")
     rumen = extract_rumen_barn(con, ta, exclude_drinking=exclude_drinking)
-    rumen.to_csv(args.out / "rumen_barn.csv", index=False)
+    rumen.to_csv(cfg.output / "rumen_barn.csv", index=False)
     log.info("  → %d rows, %d animals", len(rumen), rumen["animal_id"].nunique())
 
     log.info("Extracting respiration + barn data …")
     resp = extract_respiration_barn(con, ta)
-    resp.to_csv(args.out / "respiration_barn.csv", index=False)
+    resp.to_csv(cfg.output / "respiration_barn.csv", index=False)
     log.info("  → %d rows, %d animals", len(resp), resp["animal_id"].nunique())
 
     log.info("Extracting production data …")
     prod = extract_production(con, ta)
-    prod.to_csv(args.out / "production.csv", index=False)
+    prod.to_csv(cfg.output / "production.csv", index=False)
     n_milk = prod["mean_milk_yield_kg"].notna().sum()
     n_lac = prod["lactation_nr"].notna().sum()
     log.info("  → %d with milk yield, %d with lactation nr", n_milk, n_lac)
 
     log.info("Extracting barn climate …")
     climate = extract_climate(con, ta)
-    climate.to_csv(args.out / "climate_daily.csv", index=False)
+    climate.to_csv(cfg.output / "climate_daily.csv", index=False)
     log.info("  → %d daily records", len(climate))
 
     con.close()
-    log.info("Extraction complete. CSVs in: %s", args.out)
+    log.info("Extraction complete. CSVs in: %s", cfg.output)
 
 
 if __name__ == "__main__":

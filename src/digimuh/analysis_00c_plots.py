@@ -111,9 +111,12 @@ def add_significance_bracket(
 # ─────────────────────────────────────────────────────────────
 
 def plot_grouped_boxplots(bs: pd.DataFrame, out_dir: Path) -> None:
-    """Side-by-side boxplots: rumen vs respiration breakpoints per year."""
+    """Side-by-side boxplots: rumen vs respiration breakpoints per year,
+    with within-year Wilcoxon signed-rank tests (BH-FDR corrected)."""
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
+    from scipy.stats import wilcoxon
+    from digimuh.analysis_00b_stats import benjamini_hochberg, p_to_stars
     _setup()
 
     years = sorted(bs["year"].dropna().unique().astype(int))
@@ -124,8 +127,10 @@ def plot_grouped_boxplots(bs: pd.DataFrame, out_dir: Path) -> None:
     ]:
         rumen_col = f"{env_col}_breakpoint"
         resp_col = f"resp_{env_col}_breakpoint"
-        rumen_conv = bs[bs[f"{env_col}_converged"] == True]
-        resp_conv = bs[bs[f"resp_{env_col}_converged"] == True]
+        rumen_conv_col = f"{env_col}_converged"
+        resp_conv_col = f"resp_{env_col}_converged"
+        rumen_conv = bs[bs[rumen_conv_col] == True]
+        resp_conv = bs[bs[resp_conv_col] == True]
 
         fig, ax = plt.subplots(figsize=(10, 6))
         width = 0.35
@@ -172,6 +177,50 @@ def plot_grouped_boxplots(bs: pd.DataFrame, out_dir: Path) -> None:
             if has_resp and len(data_resp[i]) > 0:
                 ax.text(i + width / 2, ymin + 0.5, f"n={len(data_resp[i])}",
                         ha="center", fontsize=8, color="#555")
+
+        # Within-year paired Wilcoxon: rumen vs resp breakpoints
+        # (only for animals with both converged in the same year)
+        raw_ps = []
+        year_indices = []
+        paired_ns = []
+        for i, y in enumerate(years):
+            paired = bs[
+                (bs["year"] == y)
+                & (bs[rumen_conv_col] == True)
+                & (bs[resp_conv_col] == True)
+            ].dropna(subset=[rumen_col, resp_col])
+            if len(paired) >= 5:
+                try:
+                    _, p = wilcoxon(paired[rumen_col], paired[resp_col])
+                    raw_ps.append(p)
+                    year_indices.append(i)
+                    paired_ns.append(len(paired))
+                except ValueError:
+                    pass
+
+        # BH-FDR correction across years, draw brackets
+        if raw_ps:
+            adj_ps = benjamini_hochberg(np.array(raw_ps))
+            yrange = ax.get_ylim()[1] - ax.get_ylim()[0]
+            bracket_base = ax.get_ylim()[1] + yrange * 0.02
+
+            for j, (yi, adj_p, n_paired) in enumerate(
+                zip(year_indices, adj_ps, paired_ns)
+            ):
+                stars = p_to_stars(adj_p)
+                x_left = yi - width / 2
+                x_right = yi + width / 2
+                bracket_y = bracket_base + j * yrange * 0.001
+                add_significance_bracket(
+                    ax, x_left, x_right, bracket_y, stars, h=0.02)
+                # Annotate paired n below bracket
+                ax.text((x_left + x_right) / 2, bracket_y - yrange * 0.015,
+                        f"n={n_paired}", ha="center", fontsize=7,
+                        color="#777777")
+
+            # Expand y-axis for brackets + labels
+            ax.set_ylim(ax.get_ylim()[0],
+                        bracket_base + yrange * 0.12)
 
         _save(fig, f"boxplot_{fname}", out_dir)
 
@@ -494,67 +543,175 @@ def plot_examples(
     rumen: pd.DataFrame, resp: pd.DataFrame, bs: pd.DataFrame,
     out_dir: Path,
 ) -> None:
-    """Plot broken-stick fit for the best example animal (rumen + resp)."""
+    """Diagnostic example panels for each signal/predictor combination.
+
+    For each of the four models (body temp vs THI, body temp vs barn temp,
+    resp vs THI, resp vs barn temp), plots three scenarios:
+
+    A) BS converged + Hill converged (both methods agree)
+    B) BS failed + Hill converged (Hill rescues the threshold)
+    C) Davies n.s. (no threshold exists, models should not be trusted)
+
+    Each panel shows the raw data, the broken-stick fit (if converged),
+    the Hill fit with lower bend point, and the Davies p-value.
+    """
     import matplotlib.pyplot as plt
-    # Import the fit function from stats module
-    from digimuh.analysis_00b_stats import broken_stick_fit
+    from digimuh.analysis_00b_stats import broken_stick_fit, hill_fit
     _setup()
 
-    for signal, data, response_col, ylabel, prefix, conv_col in [
-        ("rumen", rumen, "body_temp", "Rumen temperature (°C)", "thi", "thi_converged"),
-        ("rumen", rumen, "body_temp", "Rumen temperature (°C)", "temp", "temp_converged"),
-        ("resp", resp, "resp_rate", "Respiration rate (bpm)", "resp_thi", "resp_thi_converged"),
-        ("resp", resp, "resp_rate", "Respiration rate (bpm)", "resp_temp", "resp_temp_converged"),
-    ]:
+    configs = [
+        ("rumen", rumen, "body_temp", "Rumen temperature (°C)",
+         "thi", "thi", "barn_thi", "Barn THI", (45, 80)),
+        ("rumen", rumen, "body_temp", "Rumen temperature (°C)",
+         "temp", "temp", "barn_temp", "Barn temperature (°C)", (5, 35)),
+        ("resp", resp, "resp_rate", "Respiration rate (bpm)",
+         "resp_thi", "resp_thi", "barn_thi", "Barn THI", (45, 80)),
+        ("resp", resp, "resp_rate", "Respiration rate (bpm)",
+         "resp_temp", "resp_temp", "barn_temp", "Barn temperature (°C)", (5, 35)),
+    ]
+
+    for signal, data, response_col, ylabel, prefix, bs_prefix, env_col, env_label, x_range in configs:
         if data.empty:
             continue
 
-        conv = bs[bs[conv_col] == True]
-        r2_col = f"{prefix}_r_squared"
-        if r2_col not in conv.columns or conv.empty:
+        conv_col = f"{bs_prefix}_converged"
+        davies_col = f"{bs_prefix}_davies_p"
+        hill_conv_col = f"{bs_prefix}_hill_converged"
+        hill_bend_col = f"{bs_prefix}_hill_bend"
+        r2_col = f"{bs_prefix}_r_squared"
+
+        if conv_col not in bs.columns or davies_col not in bs.columns:
             continue
 
-        best = conv.loc[conv[r2_col].idxmax()]
-        aid = int(best["animal_id"])
-        year = int(best["year"])
+        # ── Select exemplar animals for three scenarios ──────
 
-        grp = data[(data["animal_id"] == aid) & (data["year"] == year)]
-        if len(grp) < 30:
+        # Scenario A: BS converged + Hill converged (best R2)
+        mask_a = (bs[conv_col] == True)
+        if hill_conv_col in bs.columns:
+            mask_a = mask_a & (bs[hill_conv_col] == True)
+        candidates_a = bs[mask_a]
+        animal_a = None
+        if not candidates_a.empty and r2_col in candidates_a.columns:
+            valid_a = candidates_a[candidates_a[r2_col].notna()]
+            if not valid_a.empty:
+                animal_a = valid_a.loc[valid_a[r2_col].idxmax()]
+
+        # Scenario B: BS failed + Hill converged (Hill rescues)
+        mask_b = (bs[conv_col] != True) & (bs[davies_col].fillna(1) < 0.05)
+        if hill_conv_col in bs.columns:
+            mask_b = mask_b & (bs[hill_conv_col] == True) & bs[hill_bend_col].notna()
+        candidates_b = bs[mask_b]
+        animal_b = None
+        if not candidates_b.empty:
+            hill_r2_col = f"{bs_prefix}_hill_r2"
+            if hill_r2_col in candidates_b.columns:
+                valid_b = candidates_b[candidates_b[hill_r2_col].notna()]
+                if not valid_b.empty:
+                    animal_b = valid_b.loc[valid_b[hill_r2_col].idxmax()]
+
+        # Scenario C: Davies n.s. (no threshold)
+        mask_c = bs[davies_col].fillna(1) >= 0.05
+        candidates_c = bs[mask_c]
+        animal_c = None
+        if not candidates_c.empty:
+            # Pick one with most data
+            n_col = "n_readings" if "resp" not in prefix else "n_resp_readings"
+            if n_col in candidates_c.columns:
+                valid_c = candidates_c[candidates_c[n_col] > 50]
+                if not valid_c.empty:
+                    animal_c = valid_c.loc[valid_c[n_col].idxmax()]
+
+        scenarios = [
+            ("A", animal_a, "BS + Hill converged"),
+            ("B", animal_b, "BS failed, Hill rescues"),
+            ("C", animal_c, "Davies n.s. (no threshold)"),
+        ]
+        valid_scenarios = [(s, a, t) for s, a, t in scenarios if a is not None]
+
+        if not valid_scenarios:
             continue
 
-        env_col = "barn_thi" if "thi" in prefix else "barn_temp"
-        env_label = "Barn THI" if "thi" in prefix else "Barn temperature (°C)"
-        x_range = (45, 80) if "thi" in prefix else (5, 35)
+        fig, axes = plt.subplots(1, len(valid_scenarios),
+                                 figsize=(7 * len(valid_scenarios), 6))
+        if len(valid_scenarios) == 1:
+            axes = [axes]
 
-        fit = broken_stick_fit(grp[env_col].values, grp[response_col].values,
-                               x_range=x_range)
-        if not fit.get("converged"):
-            continue
+        for ax, (scenario, animal_row, scenario_title) in zip(axes, valid_scenarios):
+            aid = int(animal_row["animal_id"])
+            year = int(animal_row["year"])
 
-        bp = fit["breakpoint"]
-        fig, ax = plt.subplots(figsize=(9, 6))
-        ax.scatter(grp[env_col], grp[response_col], s=2, alpha=0.15,
-                   c=COLOURS["identity"])
+            grp = data[(data["animal_id"] == aid) & (data["year"] == year)]
+            if len(grp) < 30:
+                ax.text(0.5, 0.5, "Insufficient data", transform=ax.transAxes, ha="center")
+                continue
 
-        xr = np.linspace(grp[env_col].min(), grp[env_col].max(), 200)
-        yp = np.where(
-            xr <= bp,
-            fit["intercept_below"] + fit["slope_below"] * xr,
-            fit["intercept_above"] + fit["slope_above"] * xr,
+            x_vals = grp[env_col].values
+            y_vals = grp[response_col].values
+
+            # Scatter
+            ax.scatter(x_vals, y_vals, s=2, alpha=0.12, c=COLOURS["identity"])
+
+            xr = np.linspace(np.min(x_vals), np.max(x_vals), 300)
+
+            # Broken-stick fit
+            bs_fit = broken_stick_fit(x_vals, y_vals, x_range=x_range)
+            if bs_fit.get("converged"):
+                bp = bs_fit["breakpoint"]
+                yp = np.where(
+                    xr <= bp,
+                    bs_fit["intercept_below"] + bs_fit["slope_below"] * xr,
+                    bs_fit["intercept_above"] + bs_fit["slope_above"] * xr,
+                )
+                ax.plot(xr, yp, color=COLOURS["below_bp"], linewidth=2,
+                        label=f"BS bp={bp:.1f}")
+                ax.axvline(bp, color=COLOURS["below_bp"], linestyle="--",
+                           linewidth=1, alpha=0.6)
+
+            # Hill fit
+            h = hill_fit(x_vals, y_vals, x_range=x_range)
+            if h.get("converged"):
+                y_min, y_max_fit = h["y_min"], h["y_max"]
+                ec50, hill_n = h["ec50"], h["hill_n"]
+                ratio = np.clip(ec50 / np.maximum(xr, 1e-10), 1e-10, 1e10)
+                yh = y_min + (y_max_fit - y_min) / (1.0 + np.power(ratio, hill_n))
+                ax.plot(xr, yh, color=COLOURS["above_bp"], linewidth=2,
+                        linestyle="-", label=f"Hill EC50={ec50:.1f}")
+
+                # Lower bend point
+                bend = h.get("lower_bend")
+                if bend is not None and not np.isnan(bend):
+                    ax.axvline(bend, color=COLOURS["above_bp"], linestyle=":",
+                               linewidth=1.5, alpha=0.8,
+                               label=f"Hill onset={bend:.1f}")
+
+            # Davies p annotation
+            davies_p = animal_row.get(davies_col)
+            pscore_p = animal_row.get(f"{bs_prefix}_pscore_p")
+            anno = []
+            if pd.notna(davies_p):
+                anno.append(f"Davies p={davies_p:.4f}")
+            if pd.notna(pscore_p):
+                anno.append(f"Pscore p={pscore_p:.4f}")
+            if anno:
+                ax.text(0.02, 0.98, "\n".join(anno),
+                        transform=ax.transAxes, va="top", fontsize=8,
+                        color="#555", fontstyle="italic",
+                        bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
+                                  alpha=0.8, edgecolor="#ccc"))
+
+            ax.set_xlabel(env_label)
+            ax.set_ylabel(ylabel)
+            ax.set_title(f"({scenario}) {scenario_title}\n"
+                         f"Animal {aid} ({year}), n={len(grp):,}",
+                         fontsize=10)
+            ax.legend(fontsize=8, loc="lower right")
+
+        fig.suptitle(
+            f"Diagnostic examples: {ylabel.split('(')[0].strip()} vs {env_label}",
+            fontsize=13, fontweight="bold",
         )
-        ax.plot(xr, yp, color=COLOURS["fit_line"], linewidth=2,
-                label="Broken-stick fit")
-        ax.axvline(bp, color=COLOURS["below_bp"], linestyle="--",
-                   linewidth=1.5, label=f"Breakpoint = {bp:.1f}")
-        ax.set_xlabel(env_label)
-        ax.set_ylabel(ylabel)
-        ax.set_title(
-            f"Animal {aid} ({year}) — {ylabel.split('(')[0].strip()} "
-            f"breakpoint at {env_label} = {bp:.1f}\n"
-            f"R² = {fit['r_squared']:.3f}, n = {fit['n']:,}",
-        )
-        ax.legend()
-        _save(fig, f"example_{prefix}_{aid}_{year}", out_dir)
+        fig.tight_layout()
+        _save(fig, f"diagnostic_{prefix}", out_dir)
 
 
 # ─────────────────────────────────────────────────────────────
