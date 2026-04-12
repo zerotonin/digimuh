@@ -1343,6 +1343,85 @@ def compute_event_triggered_average(
 
 
 # ─────────────────────────────────────────────────────────────
+#  « breakpoint crossing clock-time raster »
+# ─────────────────────────────────────────────────────────────
+
+def compute_crossing_times(
+    rumen: pd.DataFrame, bs_results: pd.DataFrame,
+    min_gap: int = 6,
+) -> pd.DataFrame:
+    """Extract clock times of all breakpoint crossing events.
+
+    For each animal, finds moments when barn THI (or barn temp) crosses
+    the animal's individual breakpoint upward, and records the clock
+    time.  Used for the activation raster plot.
+
+    Args:
+        rumen: rumen_barn.csv DataFrame.
+        bs_results: broken_stick_results.csv DataFrame.
+        min_gap: Minimum samples between events (default 6 = 1 hour).
+
+    Returns:
+        DataFrame with columns: animal_id, year, predictor, breakpoint,
+        crossing_timestamp, clock_hour, clock_minute, day_fraction.
+    """
+    rumen = rumen.copy()
+    rumen["timestamp"] = pd.to_datetime(rumen["timestamp"])
+
+    records = []
+
+    for prefix, env_col, conv_col, bp_col in [
+        ("thi", "barn_thi", "thi_converged", "thi_breakpoint"),
+        ("temp", "barn_temp", "temp_converged", "temp_breakpoint"),
+    ]:
+        converged = bs_results[bs_results[conv_col] == True]
+
+        for _, row in converged.iterrows():
+            aid = int(row["animal_id"])
+            year = int(row["year"])
+            bp = row[bp_col]
+
+            grp = rumen[(rumen["animal_id"] == aid) & (rumen["year"] == year)].copy()
+            if len(grp) < 50:
+                continue
+
+            grp = grp.sort_values("timestamp").reset_index(drop=True)
+            x = grp[env_col].values
+            ts = grp["timestamp"].values
+            n = len(x)
+
+            # Upward crossings
+            below = x[:-1] <= bp
+            above = x[1:] > bp
+            crossings = np.where(below & above)[0]
+
+            if len(crossings) == 0:
+                continue
+
+            # Filter minimum gap
+            filtered = [crossings[0]]
+            for c in crossings[1:]:
+                if c - filtered[-1] >= min_gap:
+                    filtered.append(c)
+
+            for c in filtered:
+                t = pd.Timestamp(ts[c])
+                records.append({
+                    "animal_id": aid,
+                    "year": year,
+                    "predictor": prefix,
+                    "breakpoint": bp,
+                    "crossing_timestamp": t,
+                    "date": t.date(),
+                    "clock_hour": t.hour,
+                    "clock_minute": t.minute,
+                    "day_fraction": t.hour + t.minute / 60.0,
+                })
+
+    return pd.DataFrame(records)
+
+
+# ─────────────────────────────────────────────────────────────
 #  « breakpoint stability (ICC) »
 # ─────────────────────────────────────────────────────────────
 
@@ -1776,7 +1855,24 @@ def main() -> None:
             else:
                 kv(f"  {ml}", "THI stays below breakpoint all day")
 
-    # ── 7. Cross-correlation ─────────────────────────────────
+    # ── 7. Breakpoint crossing raster ────────────────────────
+    section("Breakpoint crossing times",
+            "When during the 24h cycle does each cow's THI cross her breakpoint?")
+    crossing_times = compute_crossing_times(rumen, bs)
+    crossing_times.to_csv(d / "crossing_times.csv", index=False)
+
+    if not crossing_times.empty:
+        for pred in ["thi", "temp"]:
+            psub = crossing_times[crossing_times["predictor"] == pred]
+            if not psub.empty:
+                kv(f"{pred.upper()} crossings",
+                   f"{len(psub)} events from {psub['animal_id'].nunique()} animals")
+                kv(f"  Median clock time",
+                   f"{psub['day_fraction'].median():.1f}h "
+                   f"[IQR {psub['day_fraction'].quantile(0.25):.1f}–"
+                   f"{psub['day_fraction'].quantile(0.75):.1f}h]")
+
+    # ── 8. Cross-correlation ─────────────────────────────────
     section("Cross-correlation",
             "Climate vs rumen temp, below/above breakpoint\n"
             "Raw = includes 24h diurnal cycle; Detrended = per-day mean removed")

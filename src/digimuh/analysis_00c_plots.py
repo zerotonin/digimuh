@@ -933,6 +933,127 @@ def plot_thi_daily_profile(out_dir: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────
+#  « breakpoint crossing raster + raincloud »
+# ─────────────────────────────────────────────────────────────
+
+def plot_crossing_raster(out_dir: Path) -> None:
+    """Raster plot of breakpoint crossing events across the 24h cycle.
+
+    Left panel: activation raster — each row is one cow (sorted by
+    breakpoint value), each dot is a crossing event at that clock time.
+    Dot colour = breakpoint value.
+
+    Right panel: raincloud — half-violin (KDE) + jittered scatter +
+    boxplot of crossing clock times.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import PathCollection
+    _setup()
+
+    path = out_dir / "crossing_times.csv"
+    if not path.exists():
+        log.info("  crossing_times.csv not found, skipping raster plot")
+        return
+
+    df = pd.read_csv(path)
+    if df.empty:
+        return
+
+    log.info("  Plotting crossing raster (%d events) …", len(df))
+
+    for pred, pred_label, bp_label in [
+        ("thi", "THI breakpoint crossing", "THI breakpoint"),
+        ("temp", "Barn temp breakpoint crossing", "Barn temp breakpoint (°C)"),
+    ]:
+        sub = df[df["predictor"] == pred]
+        if sub.empty or sub["animal_id"].nunique() < 5:
+            continue
+
+        # Sort animals by their breakpoint value
+        animal_bps = sub.groupby("animal_id")["breakpoint"].first().sort_values()
+        animal_order = {aid: i for i, aid in enumerate(animal_bps.index)}
+        sub = sub.copy()
+        sub["y_pos"] = sub["animal_id"].map(animal_order)
+        n_animals = len(animal_order)
+
+        fig, axes = plt.subplots(1, 2, figsize=(16, max(6, n_animals * 0.06)),
+                                 gridspec_kw={"width_ratios": [3, 1]})
+
+        # ── Left: Raster ─────────────────────────────────────
+        ax = axes[0]
+        sc = ax.scatter(
+            sub["day_fraction"], sub["y_pos"],
+            c=sub["breakpoint"], cmap="coolwarm",
+            s=3, alpha=0.3, edgecolors="none",
+            vmin=sub["breakpoint"].quantile(0.05),
+            vmax=sub["breakpoint"].quantile(0.95),
+        )
+        cbar = fig.colorbar(sc, ax=ax, pad=0.01, shrink=0.7)
+        cbar.set_label(bp_label, fontsize=9)
+
+        # Milking windows
+        for start, end in [(4, 7), (16, 19)]:
+            ax.axvspan(start, end, alpha=0.08, color="#999", zorder=0)
+
+        ax.set_xlabel("Hour of day")
+        ax.set_ylabel(f"Animals (sorted by {bp_label}, n={n_animals})")
+        ax.set_xlim(-0.5, 24)
+        ax.set_xticks(range(0, 25, 2))
+        ax.set_ylim(-1, n_animals)
+        ax.set_yticks([])
+        ax.set_title(f"Crossing event raster\n({len(sub)} events)")
+
+        # ── Right: Raincloud ─────────────────────────────────
+        ax = axes[1]
+
+        # Half-violin (KDE)
+        from scipy.stats import gaussian_kde
+        vals = sub["day_fraction"].dropna().values
+        if len(vals) > 10:
+            kde = gaussian_kde(vals, bw_method=0.3)
+            x_kde = np.linspace(0, 24, 200)
+            y_kde = kde(x_kde)
+            # Scale KDE to fit nicely
+            y_kde_scaled = y_kde / y_kde.max() * 0.35
+            ax.fill_betweenx(x_kde, 0, y_kde_scaled,
+                            alpha=0.3, color=COLOURS["below_bp"])
+            ax.plot(y_kde_scaled, x_kde, color=COLOURS["below_bp"], linewidth=1.5)
+
+        # Jittered scatter
+        jitter = np.random.uniform(0.4, 0.7, len(vals))
+        ax.scatter(jitter, vals, s=2, alpha=0.15,
+                   color=COLOURS["below_bp"], edgecolors="none")
+
+        # Boxplot
+        bp_plot = ax.boxplot(
+            vals, positions=[0.85], widths=0.12,
+            vert=True, patch_artist=True,
+            boxprops=dict(facecolor=COLOURS["below_bp"], alpha=0.5, edgecolor="#333"),
+            medianprops=dict(color="#333", linewidth=2),
+            whiskerprops=dict(color="#333"),
+            capprops=dict(color="#333"),
+            flierprops=dict(marker="o", markersize=2, alpha=0.3),
+        )
+
+        ax.set_ylim(-0.5, 24)
+        ax.set_yticks(range(0, 25, 2))
+        ax.set_ylabel("Hour of day")
+        ax.set_xlim(-0.05, 1.1)
+        ax.set_xticks([])
+        ax.set_title("Distribution")
+        ax.invert_yaxis()  # 0h at top to match intuition
+
+        # Milking windows on raincloud too
+        for start, end in [(4, 7), (16, 19)]:
+            ax.axhspan(start, end, alpha=0.08, color="#999", zorder=0)
+
+        fig.suptitle(f"Breakpoint crossing activation: {pred_label}",
+                     fontsize=13, fontweight="bold")
+        fig.tight_layout()
+        _save(fig, f"crossing_raster_{pred}", out_dir)
+
+
+# ─────────────────────────────────────────────────────────────
 #  « cross-correlation below/above breakpoint »
 # ─────────────────────────────────────────────────────────────
 
@@ -1725,6 +1846,7 @@ def main() -> None:
         ("Cross-correlation", lambda: plot_cross_correlation(d)),
         ("Circadian null model", lambda: plot_circadian_null_model(d)),
         ("THI daily profile", lambda: plot_thi_daily_profile(d)),
+        ("Crossing raster", lambda: plot_crossing_raster(d)),
         ("Derivative CCF", lambda: plot_derivative_ccf(d)),
         ("Event-triggered average", lambda: plot_event_triggered_average(d)),
         ("TNF vs yield", lambda: plot_tnf_yield(d)),
