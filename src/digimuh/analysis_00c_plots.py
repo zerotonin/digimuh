@@ -778,6 +778,161 @@ def plot_thi_vs_temp_scatter(bs: pd.DataFrame, out_dir: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────
+#  « rumen circadian null model »
+# ─────────────────────────────────────────────────────────────
+
+def plot_circadian_null_model(out_dir: Path) -> None:
+    """Plot 24h rumen temperature profile: cool days vs stress days."""
+    import matplotlib.pyplot as plt
+    _setup()
+
+    path = out_dir / "circadian_null_model.csv"
+    if not path.exists():
+        log.info("  circadian_null_model.csv not found, skipping")
+        return
+
+    df = pd.read_csv(path)
+    if df.empty:
+        return
+
+    log.info("  Plotting circadian null model …")
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    for day_type, colour, label in [
+        ("cool", COLOURS["below_bp"], "Cool days (THI < breakpoint all day)"),
+        ("stress", COLOURS["above_bp"], "Heat stress days (THI exceeded breakpoint)"),
+    ]:
+        sub = df[df["day_type"] == day_type]
+        if sub.empty:
+            continue
+
+        # Grand mean ± SEM across animals at each hour
+        hourly = sub.groupby("hour")["body_temp_mean"].agg(["mean", "std", "count"])
+        hourly["sem"] = hourly["std"] / np.sqrt(hourly["count"])
+
+        ax.fill_between(hourly.index, hourly["mean"] - hourly["sem"],
+                       hourly["mean"] + hourly["sem"],
+                       alpha=0.2, color=colour)
+        ax.plot(hourly.index, hourly["mean"], color=colour, linewidth=2,
+                marker="o", markersize=4, label=label)
+
+    # Mark milking exclusion windows
+    for start, end in [(4, 7), (16, 19)]:
+        ax.axvspan(start, end, alpha=0.08, color="#999", zorder=0)
+        if start == 4:
+            ax.text(5.5, ax.get_ylim()[0] + 0.001, "Milking",
+                    ha="center", fontsize=8, color="#999", fontstyle="italic")
+
+    ax.set_xlabel("Hour of day")
+    ax.set_ylabel("Rumen temperature (°C)")
+    ax.set_title("Rumen temperature circadian profile\n"
+                 "(cool days = null model, stress days = heat effect)")
+    ax.set_xticks(range(0, 24, 2))
+    ax.set_xlim(-0.5, 23.5)
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+    _save(fig, "circadian_null_model", out_dir)
+
+
+# ─────────────────────────────────────────────────────────────
+#  « THI daily exceedance profile »
+# ─────────────────────────────────────────────────────────────
+
+def plot_thi_daily_profile(out_dir: Path) -> None:
+    """Plot barn THI across 24h by month, with herd breakpoint line."""
+    import matplotlib.pyplot as plt
+    _setup()
+
+    path = out_dir / "thi_daily_profile.csv"
+    if not path.exists():
+        log.info("  thi_daily_profile.csv not found, skipping")
+        return
+
+    df = pd.read_csv(path)
+    if df.empty:
+        return
+
+    log.info("  Plotting THI daily profile …")
+
+    herd_bp = df["herd_median_bp"].iloc[0] if "herd_median_bp" in df.columns else np.nan
+
+    # One plot per year
+    years = sorted(df["year"].unique().astype(int))
+
+    for year in years:
+        ydf = df[df["year"] == year]
+        if ydf.empty:
+            continue
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        month_colours = {6: "#009E73", 7: "#E69F00", 8: "#D55E00", 9: "#CC79A7"}
+        month_names = {6: "June", 7: "July", 8: "August", 9: "September"}
+
+        for month in sorted(ydf["month"].unique().astype(int)):
+            msub = ydf[ydf["month"] == month]
+            if msub.empty:
+                continue
+
+            colour = month_colours.get(month, "#888")
+            ax.fill_between(msub["hour"], msub["thi_q25"], msub["thi_q75"],
+                           alpha=0.1, color=colour)
+            ax.plot(msub["hour"], msub["thi_mean"], color=colour, linewidth=2,
+                    marker="o", markersize=3,
+                    label=f"{month_names.get(month, str(month))}")
+
+        # Herd median breakpoint
+        if not np.isnan(herd_bp):
+            ax.axhline(herd_bp, color="#333", linewidth=1.5, linestyle="--",
+                       label=f"Herd median THI breakpoint ({herd_bp:.1f})")
+
+        # Mark milking windows
+        for start, end in [(4, 7), (16, 19)]:
+            ax.axvspan(start, end, alpha=0.08, color="#999", zorder=0)
+
+        ax.set_xlabel("Hour of day")
+        ax.set_ylabel("Barn THI")
+        ax.set_title(f"Barn THI daily profile ({year})\n"
+                     f"(lines = mean, shading = IQR)")
+        ax.set_xticks(range(0, 24, 2))
+        ax.set_xlim(-0.5, 23.5)
+        ax.legend(fontsize=9)
+        fig.tight_layout()
+        _save(fig, f"thi_daily_profile_{year}", out_dir)
+
+    # All years combined
+    fig, ax = plt.subplots(figsize=(12, 6))
+    labels_seen = set()
+    for ml in sorted(df["month_label"].unique()):
+        msub = df[df["month_label"] == ml]
+        month = int(msub["month"].iloc[0])
+        year = int(msub["year"].iloc[0])
+        colour = month_colours.get(month, "#888")
+        # Vary line style by year
+        ls = ["-", "--", ":", "-."][years.index(year) % 4]
+        ax.plot(msub["hour"], msub["thi_mean"], color=colour, linewidth=1.5,
+                linestyle=ls, alpha=0.7, label=ml)
+
+    if not np.isnan(herd_bp):
+        ax.axhline(herd_bp, color="#333", linewidth=1.5, linestyle="--",
+                   label=f"Herd breakpoint ({herd_bp:.1f})")
+
+    for start, end in [(4, 7), (16, 19)]:
+        ax.axvspan(start, end, alpha=0.08, color="#999", zorder=0)
+
+    ax.set_xlabel("Hour of day")
+    ax.set_ylabel("Barn THI")
+    ax.set_title("Barn THI daily profile — all years\n"
+                 "(when does heat stress occur?)")
+    ax.set_xticks(range(0, 24, 2))
+    ax.set_xlim(-0.5, 23.5)
+    ax.legend(fontsize=7, ncol=2)
+    fig.tight_layout()
+    _save(fig, "thi_daily_profile_all", out_dir)
+
+
+# ─────────────────────────────────────────────────────────────
 #  « cross-correlation below/above breakpoint »
 # ─────────────────────────────────────────────────────────────
 
@@ -1568,6 +1723,8 @@ def main() -> None:
         ("Body temp vs resp scatter", lambda: plot_bodytemp_vs_resp_scatter(bs, d)),
         ("Diagnostic examples", lambda: plot_examples(rumen, resp, bs, d)),
         ("Cross-correlation", lambda: plot_cross_correlation(d)),
+        ("Circadian null model", lambda: plot_circadian_null_model(d)),
+        ("THI daily profile", lambda: plot_thi_daily_profile(d)),
         ("Derivative CCF", lambda: plot_derivative_ccf(d)),
         ("Event-triggered average", lambda: plot_event_triggered_average(d)),
         ("TNF vs yield", lambda: plot_tnf_yield(d)),

@@ -1009,6 +1009,132 @@ def compute_cross_correlation(
 
 
 # ─────────────────────────────────────────────────────────────
+#  « rumen temperature circadian null model »
+# ─────────────────────────────────────────────────────────────
+
+def compute_circadian_null_model(
+    rumen: pd.DataFrame, bs_results: pd.DataFrame,
+) -> pd.DataFrame:
+    """Rumen temperature circadian profile on non-stress days.
+
+    For each animal with a converged THI breakpoint, identifies days
+    where barn THI stayed below the breakpoint for the entire day
+    (no heat stress).  Computes the mean rumen temperature at each
+    clock hour across these cool days.
+
+    This gives the circadian null model: what rumen temperature looks
+    like when the cow is entirely in the thermoneutral zone.
+
+    Also computes the profile on stress days (THI exceeded breakpoint
+    at some point during the day) for comparison.
+
+    Args:
+        rumen: rumen_barn.csv DataFrame.
+        bs_results: broken_stick_results.csv DataFrame.
+
+    Returns:
+        DataFrame with columns: animal_id, year, hour, day_type
+        (cool/stress), body_temp_mean, body_temp_std, n_readings.
+    """
+    rumen = rumen.copy()
+    rumen["timestamp"] = pd.to_datetime(rumen["timestamp"])
+    rumen["date"] = rumen["timestamp"].dt.date
+    rumen["hour"] = rumen["timestamp"].dt.hour
+
+    converged = bs_results[bs_results["thi_converged"] == True]
+    records = []
+
+    for _, row in converged.iterrows():
+        aid = int(row["animal_id"])
+        year = int(row["year"])
+        bp = row["thi_breakpoint"]
+
+        grp = rumen[(rumen["animal_id"] == aid) & (rumen["year"] == year)]
+        if len(grp) < 100:
+            continue
+
+        # Classify each day: did THI exceed the breakpoint at any point?
+        daily_max_thi = grp.groupby("date")["barn_thi"].max()
+        cool_days = set(daily_max_thi[daily_max_thi <= bp].index)
+        stress_days = set(daily_max_thi[daily_max_thi > bp].index)
+
+        for day_type, day_set in [("cool", cool_days), ("stress", stress_days)]:
+            if not day_set:
+                continue
+            subset = grp[grp["date"].isin(day_set)]
+            for hour, hdata in subset.groupby("hour"):
+                if len(hdata) < 5:
+                    continue
+                records.append({
+                    "animal_id": aid, "year": year,
+                    "hour": int(hour),
+                    "day_type": day_type,
+                    "body_temp_mean": hdata["body_temp"].mean(),
+                    "body_temp_std": hdata["body_temp"].std(),
+                    "thi_mean": hdata["barn_thi"].mean(),
+                    "n_readings": len(hdata),
+                    "n_days": hdata["date"].nunique(),
+                })
+
+    return pd.DataFrame(records)
+
+
+# ─────────────────────────────────────────────────────────────
+#  « THI daily exceedance profile »
+# ─────────────────────────────────────────────────────────────
+
+def compute_thi_daily_profile(
+    rumen: pd.DataFrame, bs_results: pd.DataFrame,
+) -> pd.DataFrame:
+    """Barn THI profile across 24h, by month.
+
+    For each month of the observation period, computes the mean barn
+    THI at each clock hour.  Overlaid with the herd median breakpoint,
+    this shows when heat stress typically begins and ends each month.
+
+    Args:
+        rumen: rumen_barn.csv DataFrame.
+        bs_results: broken_stick_results.csv DataFrame.
+
+    Returns:
+        DataFrame with columns: year, month, month_label, hour,
+        thi_mean, thi_std, thi_q25, thi_q75, n_readings.
+        Also includes herd_median_bp.
+    """
+    rumen = rumen.copy()
+    rumen["timestamp"] = pd.to_datetime(rumen["timestamp"])
+    rumen["hour"] = rumen["timestamp"].dt.hour
+    rumen["month"] = rumen["timestamp"].dt.month
+    rumen["year"] = rumen["year"].astype(int)
+
+    month_names = {6: "June", 7: "July", 8: "August", 9: "September"}
+
+    # Herd median THI breakpoint
+    thi_conv = bs_results[bs_results["thi_converged"] == True]
+    herd_median_bp = thi_conv["thi_breakpoint"].median() if not thi_conv.empty else np.nan
+
+    records = []
+    for (year, month), grp in rumen.groupby(["year", "month"]):
+        if int(month) not in month_names:
+            continue
+        for hour, hdata in grp.groupby("hour"):
+            records.append({
+                "year": int(year),
+                "month": int(month),
+                "month_label": f"{month_names[int(month)]} {int(year)}",
+                "hour": int(hour),
+                "thi_mean": hdata["barn_thi"].mean(),
+                "thi_std": hdata["barn_thi"].std(),
+                "thi_q25": hdata["barn_thi"].quantile(0.25),
+                "thi_q75": hdata["barn_thi"].quantile(0.75),
+                "n_readings": len(hdata),
+                "herd_median_bp": herd_median_bp,
+            })
+
+    return pd.DataFrame(records)
+
+
+# ─────────────────────────────────────────────────────────────
 #  « derivative cross-correlation »
 # ─────────────────────────────────────────────────────────────
 
@@ -1610,7 +1736,47 @@ def main() -> None:
             highlight_col=5,
         )
 
-    # ── 5. Cross-correlation ─────────────────────────────────
+    # ── 5. Rumen temperature circadian null model ──────────
+    section("Rumen circadian null model",
+            "Hourly rumen temp profile on cool days (no heat stress) vs stress days")
+    circadian = compute_circadian_null_model(rumen, bs)
+    circadian.to_csv(d / "circadian_null_model.csv", index=False)
+
+    if not circadian.empty:
+        for day_type in ["cool", "stress"]:
+            sub = circadian[circadian["day_type"] == day_type]
+            if not sub.empty:
+                # Grand mean across animals per hour
+                hourly = sub.groupby("hour")["body_temp_mean"].agg(["mean", "std", "count"])
+                peak_h = hourly["mean"].idxmax()
+                trough_h = hourly["mean"].idxmin()
+                amplitude = hourly["mean"].max() - hourly["mean"].min()
+                kv(f"{day_type.capitalize()} days: n animals", sub["animal_id"].nunique())
+                kv(f"  Amplitude (peak-trough)", f"{amplitude:.3f} °C")
+                kv(f"  Peak hour", f"{peak_h}:00")
+                kv(f"  Trough hour", f"{trough_h}:00")
+
+    # ── 6. THI daily exceedance profile ──────────────────────
+    section("THI daily exceedance",
+            "Barn THI by clock hour and month — when does heat stress occur?")
+    thi_profile = compute_thi_daily_profile(rumen, bs)
+    thi_profile.to_csv(d / "thi_daily_profile.csv", index=False)
+
+    if not thi_profile.empty:
+        herd_bp = thi_profile["herd_median_bp"].iloc[0]
+        kv("Herd median THI breakpoint", f"{herd_bp:.1f}")
+        # For each month, find the hour range where mean THI exceeds breakpoint
+        for ml in sorted(thi_profile["month_label"].unique()):
+            msub = thi_profile[thi_profile["month_label"] == ml]
+            exceeds = msub[msub["thi_mean"] > herd_bp]
+            if not exceeds.empty:
+                kv(f"  {ml}", f"THI > bp from {exceeds['hour'].min()}:00 "
+                   f"to {exceeds['hour'].max()}:00 "
+                   f"({len(exceeds)} hours)")
+            else:
+                kv(f"  {ml}", "THI stays below breakpoint all day")
+
+    # ── 7. Cross-correlation ─────────────────────────────────
     section("Cross-correlation",
             "Climate vs rumen temp, below/above breakpoint\n"
             "Raw = includes 24h diurnal cycle; Detrended = per-day mean removed")
