@@ -1287,14 +1287,19 @@ def compute_event_triggered_average(
             grp = grp.sort_values("timestamp").reset_index(drop=True)
             x = grp[env_col].values
             y = grp["body_temp"].values
+            ts = pd.to_datetime(grp["timestamp"]).values
             n = len(x)
             # Animal's overall mean body temp (for centering across animals)
             animal_mean_bt = np.mean(y)
 
             # Find upward crossings: x[i] <= bp and x[i+1] > bp
+            # Only count if consecutive readings are < 30 min apart
+            # (rejects milking gap artifacts where 3h of data is missing)
             below = x[:-1] <= bp
             above = x[1:] > bp
-            crossings = np.where(below & above)[0]
+            dt = np.diff(ts).astype("timedelta64[m]").astype(float)
+            consecutive = dt < 30
+            crossings = np.where(below & above & consecutive)[0]
 
             if len(crossings) == 0:
                 continue
@@ -1387,13 +1392,15 @@ def compute_crossing_times(
 
             grp = grp.sort_values("timestamp").reset_index(drop=True)
             x = grp[env_col].values
-            ts = grp["timestamp"].values
+            ts = pd.to_datetime(grp["timestamp"]).values
             n = len(x)
 
-            # Upward crossings
+            # Upward crossings — only if consecutive readings < 30 min apart
             below = x[:-1] <= bp
             above = x[1:] > bp
-            crossings = np.where(below & above)[0]
+            dt = np.diff(ts).astype("timedelta64[m]").astype(float)
+            consecutive = dt < 30
+            crossings = np.where(below & above & consecutive)[0]
 
             if len(crossings) == 0:
                 continue
