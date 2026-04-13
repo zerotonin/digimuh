@@ -1318,20 +1318,31 @@ def plot_derivative_ccf(out_dir: Path) -> None:
 #  « event-triggered average plots »
 # ─────────────────────────────────────────────────────────────
 
-def plot_event_triggered_average(out_dir: Path) -> None:
+def plot_event_triggered_average(
+    out_dir: Path,
+    traces_file: str = "event_triggered_traces.csv",
+    suffix: str = "",
+    title_extra: str = "",
+) -> None:
     """Plot peri-event average of rumen temp around breakpoint crossings.
 
     Three panels per predictor:
     A) Climate signal (THI or barn temp) aligned to crossing
-    B) Rumen temperature centered on each animal's mean (absolute scale)
+    B) Raw rumen temperature
     C) Rumen temperature baseline-subtracted (acute onset)
+
+    Args:
+        out_dir: Output directory.
+        traces_file: Name of the traces CSV file.
+        suffix: Appended to output filename (e.g. '_filtered').
+        title_extra: Appended to figure title (e.g. ' (8-11h crossings)').
     """
     import matplotlib.pyplot as plt
     _setup()
 
-    traces_path = out_dir / "event_triggered_traces.csv"
+    traces_path = out_dir / traces_file
     if not traces_path.exists():
-        log.info("  event_triggered_traces.csv not found, skipping")
+        log.info("  %s not found, skipping", traces_file)
         return
 
     traces = pd.read_csv(traces_path)
@@ -1884,6 +1895,9 @@ def main() -> None:
         ("Crossing raster", lambda: plot_crossing_raster(d)),
         ("Derivative CCF", lambda: plot_derivative_ccf(d)),
         ("Event-triggered average", lambda: plot_event_triggered_average(d)),
+        ("Event-triggered average (8-11h)", lambda: plot_event_triggered_average(
+            d, traces_file="event_triggered_traces_filtered.csv",
+            suffix="_8to11h", title_extra=" (crossings 8:00–11:00 only)")),
         ("TNF vs yield", lambda: plot_tnf_yield(d)),
         ("Longitudinal breakpoints", lambda: plot_longitudinal_breakpoints(bs, d)),
         ("Sankey diagrams", lambda: plot_threshold_sankey(bs, d)),
