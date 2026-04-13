@@ -1527,6 +1527,122 @@ def plot_event_triggered_average(
 
 
 # ─────────────────────────────────────────────────────────────
+#  « climate ETA: normalised THI + barn temp around crossings »
+# ─────────────────────────────────────────────────────────────
+
+def plot_climate_eta(out_dir: Path) -> None:
+    """Climate signal around breakpoint crossings, normalised to breakpoint.
+
+    Two figures:
+    1. THI-triggered crossings: left y = THI − THI_breakpoint,
+       right y = barn temperature (raw °C)
+    2. Barn temp-triggered crossings: left y = barn_temp − temp_breakpoint,
+       right y = THI (raw)
+
+    In both cases y=0 on the left axis is the breakpoint threshold.
+    """
+    import matplotlib.pyplot as plt
+    _setup()
+
+    path = out_dir / "climate_eta.csv"
+    if not path.exists():
+        log.info("  climate_eta.csv not found, skipping")
+        return
+
+    df = pd.read_csv(path)
+    if df.empty:
+        return
+
+    log.info("  Plotting climate ETA (%d trace points) …", len(df))
+
+    configs = [
+        {
+            "trigger": "thi",
+            "norm_col": "thi_norm",
+            "companion_col": "temp_norm",
+            "norm_label": "ΔTHI (THI − breakpoint)",
+            "companion_label": "ΔBarn temperature (°C from breakpoint)",
+            "title": "Climate change around THI breakpoint crossing",
+            "fname": "climate_eta_thi",
+            "norm_colour": COLOURS["above_bp"],
+            "comp_colour": "#009E73",
+        },
+        {
+            "trigger": "temp",
+            "norm_col": "temp_norm",
+            "companion_col": "thi_norm",
+            "norm_label": "ΔBarn temperature (°C from breakpoint)",
+            "companion_label": "ΔTHI (THI − breakpoint)",
+            "title": "Climate change around barn temp breakpoint crossing",
+            "fname": "climate_eta_temp",
+            "norm_colour": COLOURS["above_bp"],
+            "comp_colour": "#009E73",
+        },
+    ]
+
+    for cfg in configs:
+        sub = df[df["trigger"] == cfg["trigger"]]
+        if sub.empty:
+            continue
+
+        n_events = sub.groupby(["animal_id", "year", "event_id"]).ngroups
+        n_animals = sub["animal_id"].nunique()
+
+        fig, ax1 = plt.subplots(figsize=(10, 6))
+
+        # Left axis: normalised trigger predictor
+        agg_norm = sub.groupby("relative_minutes")[cfg["norm_col"]].agg(
+            ["mean", "std", "count"])
+        agg_norm["sem"] = agg_norm["std"] / np.sqrt(agg_norm["count"])
+
+        ax1.fill_between(agg_norm.index,
+                        agg_norm["mean"] - agg_norm["sem"],
+                        agg_norm["mean"] + agg_norm["sem"],
+                        alpha=0.2, color=cfg["norm_colour"])
+        ax1.plot(agg_norm.index, agg_norm["mean"],
+                 color=cfg["norm_colour"], linewidth=2,
+                 label=cfg["norm_label"])
+        ax1.axhline(0, color=cfg["norm_colour"], linewidth=1, linestyle="--",
+                     alpha=0.5, label="Breakpoint (threshold)")
+        ax1.set_xlabel("Time relative to crossing (minutes)")
+        ax1.set_ylabel(cfg["norm_label"], color=cfg["norm_colour"])
+        ax1.tick_params(axis="y", labelcolor=cfg["norm_colour"])
+
+        # Crossing marker
+        ax1.axvline(0, color="#333", linewidth=1.5, linestyle="--")
+
+        # Right axis: companion predictor (normalised to its breakpoint)
+        ax2 = ax1.twinx()
+        agg_comp = sub.groupby("relative_minutes")[cfg["companion_col"]].agg(
+            ["mean", "std", "count"])
+        agg_comp["sem"] = agg_comp["std"] / np.sqrt(agg_comp["count"])
+
+        ax2.fill_between(agg_comp.index,
+                        agg_comp["mean"] - agg_comp["sem"],
+                        agg_comp["mean"] + agg_comp["sem"],
+                        alpha=0.12, color=cfg["comp_colour"])
+        ax2.plot(agg_comp.index, agg_comp["mean"],
+                 color=cfg["comp_colour"], linewidth=2,
+                 linestyle="-", label=cfg["companion_label"])
+        ax2.axhline(0, color=cfg["comp_colour"], linewidth=1, linestyle="--",
+                    alpha=0.4)
+        ax2.set_ylabel(cfg["companion_label"], color=cfg["comp_colour"])
+        ax2.tick_params(axis="y", labelcolor=cfg["comp_colour"])
+
+        # Combined legend
+        lines1, labels1 = ax1.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax1.legend(lines1 + lines2, labels1 + labels2,
+                   fontsize=9, loc="upper left")
+
+        ax1.set_title(f"{cfg['title']}\n"
+                      f"(n={n_events} events, {n_animals} animals, "
+                      f"y=0 = individual breakpoint)")
+        fig.tight_layout()
+        _save(fig, cfg["fname"], out_dir)
+
+
+# ─────────────────────────────────────────────────────────────
 #  « thermoneutral fraction vs milk yield »
 # ─────────────────────────────────────────────────────────────
 
@@ -1985,6 +2101,7 @@ def main() -> None:
         ("Event-triggered average (8-11h)", lambda: plot_event_triggered_average(
             d, traces_file="event_triggered_traces_filtered.csv",
             suffix="_8to11h", title_extra=" (crossings 8:00–11:00 only)")),
+        ("Climate ETA", lambda: plot_climate_eta(d)),
         ("TNF vs yield", lambda: plot_tnf_yield(d)),
         ("Longitudinal breakpoints", lambda: plot_longitudinal_breakpoints(bs, d)),
         ("Sankey diagrams", lambda: plot_threshold_sankey(bs, d)),

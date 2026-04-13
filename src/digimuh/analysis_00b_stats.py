@@ -1443,6 +1443,121 @@ def compute_crossing_times(
 
 
 # ─────────────────────────────────────────────────────────────
+#  « climate ETA: THI + barn temp around breakpoint crossings »
+# ─────────────────────────────────────────────────────────────
+
+def compute_climate_eta(
+    rumen: pd.DataFrame, bs_results: pd.DataFrame,
+    window: int = 36,
+    min_gap: int = 6,
+    crossing_hour_range: tuple[int, int] | None = (8, 11),
+) -> pd.DataFrame:
+    """Climate signal around breakpoint crossings, normalised to the breakpoint.
+
+    For each animal and each crossing event (upward), extracts both
+    barn THI and barn temperature in a ±window around the crossing.
+    The trigger predictor is normalised by subtracting the animal's
+    breakpoint value, so y=0 corresponds to the threshold.
+
+    Two modes:
+    - 'thi' crossings: THI normalised, barn temp as companion
+    - 'temp' crossings: barn temp normalised, THI as companion
+
+    Args:
+        rumen: rumen_barn.csv DataFrame.
+        bs_results: broken_stick_results.csv DataFrame.
+        window: Half-window in 10-min samples (default 36 = 6 hours).
+        min_gap: Minimum samples between events (default 6 = 1 hour).
+        crossing_hour_range: Restrict to crossings in this clock-hour
+            range.  Default (8, 11) = 8:00–10:59.
+
+    Returns:
+        DataFrame with columns: animal_id, year, trigger (thi/temp),
+        event_id, relative_minutes, thi_raw, temp_raw, thi_norm,
+        temp_norm, breakpoint_thi, breakpoint_temp.
+    """
+    rumen = rumen.copy()
+    rumen["timestamp"] = pd.to_datetime(rumen["timestamp"])
+    records = []
+
+    for trigger, env_col, conv_col, bp_col in [
+        ("thi", "barn_thi", "thi_converged", "thi_breakpoint"),
+        ("temp", "barn_temp", "temp_converged", "temp_breakpoint"),
+    ]:
+        converged = bs_results[bs_results[conv_col] == True]
+
+        for _, row in converged.iterrows():
+            aid = int(row["animal_id"])
+            year = int(row["year"])
+            bp = row[bp_col]
+
+            # Also get the other predictor's breakpoint if available
+            bp_thi = row.get("thi_breakpoint", np.nan)
+            bp_temp = row.get("temp_breakpoint", np.nan)
+
+            grp = rumen[(rumen["animal_id"] == aid) & (rumen["year"] == year)].copy()
+            if len(grp) < window * 3:
+                continue
+
+            grp = grp.sort_values("timestamp").reset_index(drop=True)
+            x = grp[env_col].values
+            thi_vals = grp["barn_thi"].values
+            temp_vals = grp["barn_temp"].values
+            ts = grp["timestamp"].values
+            n = len(x)
+
+            # Upward crossings with gap filter
+            below = x[:-1] <= bp
+            above = x[1:] > bp
+            dt = np.diff(ts).astype("timedelta64[m]").astype(float)
+            consecutive = dt < 30
+            crossings = np.where(below & above & consecutive)[0]
+
+            if len(crossings) == 0:
+                continue
+
+            # Filter by clock hour
+            if crossing_hour_range is not None:
+                h_start, h_end = crossing_hour_range
+                hours = pd.DatetimeIndex(ts[crossings]).hour
+                crossings = crossings[(hours >= h_start) & (hours < h_end)]
+                if len(crossings) == 0:
+                    continue
+
+            # Enforce minimum gap
+            filtered = [crossings[0]]
+            for c in crossings[1:]:
+                if c - filtered[-1] >= min_gap:
+                    filtered.append(c)
+            crossings = np.array(filtered)
+
+            event_count = 0
+            for c in crossings:
+                start = c - window
+                end = c + window + 1
+                if start < 0 or end > n:
+                    continue
+
+                event_count += 1
+                for j, idx in enumerate(range(start, end)):
+                    records.append({
+                        "animal_id": aid,
+                        "year": year,
+                        "trigger": trigger,
+                        "event_id": event_count,
+                        "relative_minutes": (j - window) * 10,
+                        "thi_raw": thi_vals[idx],
+                        "temp_raw": temp_vals[idx],
+                        "thi_norm": thi_vals[idx] - bp_thi,
+                        "temp_norm": temp_vals[idx] - bp_temp,
+                        "breakpoint_thi": bp_thi,
+                        "breakpoint_temp": bp_temp,
+                    })
+
+    return pd.DataFrame(records)
+
+
+# ─────────────────────────────────────────────────────────────
 #  « breakpoint stability (ICC) »
 # ─────────────────────────────────────────────────────────────
 
@@ -1990,6 +2105,22 @@ def main() -> None:
                    f"{psub['n_events'].sum()} events from "
                    f"{psub['animal_id'].nunique()} animals "
                    f"(median {psub['n_events'].median():.0f}/animal)")
+
+    # ── Climate ETA: THI + barn temp around crossings ────────
+    section("Climate ETA",
+            "THI and barn temp around breakpoint crossings, normalised to breakpoint")
+    climate_eta = compute_climate_eta(
+        rumen, bs,
+        crossing_hour_range=(eta_hour_start, eta_hour_end))
+    climate_eta.to_csv(d / "climate_eta.csv", index=False)
+
+    if not climate_eta.empty:
+        for trigger in ["thi", "temp"]:
+            tsub = climate_eta[climate_eta["trigger"] == trigger]
+            if not tsub.empty:
+                n_ev = tsub.groupby(["animal_id", "year", "event_id"]).ngroups
+                kv(f"{trigger.upper()} trigger ({eta_hour_start}–{eta_hour_end}h)",
+                   f"{n_ev} events from {tsub['animal_id'].nunique()} animals")
 
     # ── 8. Thermoneutral fraction vs daily milk yield ────────
     section("Thermoneutral fraction (TNF)",
