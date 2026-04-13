@@ -782,8 +782,10 @@ def plot_thi_vs_temp_scatter(bs: pd.DataFrame, out_dir: Path) -> None:
 # ─────────────────────────────────────────────────────────────
 
 def plot_circadian_null_model(out_dir: Path) -> None:
-    """Plot 24h rumen temperature profile: cool days vs stress days."""
+    """Plot 24h rumen temperature profile: cool days vs stress days,
+    with breakpoint crossing probability density on secondary y-axis."""
     import matplotlib.pyplot as plt
+    from scipy.stats import gaussian_kde
     _setup()
 
     path = out_dir / "circadian_null_model.csv"
@@ -826,11 +828,44 @@ def plot_circadian_null_model(out_dir: Path) -> None:
 
     ax.set_xlabel("Hour of day")
     ax.set_ylabel("Rumen temperature (°C)")
-    ax.set_title("Rumen temperature circadian profile\n"
-                 "(cool days = null model, stress days = heat effect)")
     ax.set_xticks(range(0, 24, 2))
     ax.set_xlim(-0.5, 23.5)
-    ax.legend(fontsize=9)
+
+    # ── Secondary y-axis: crossing probability density ────────
+    crossing_path = out_dir / "crossing_times.csv"
+    if crossing_path.exists():
+        ct = pd.read_csv(crossing_path)
+        ct_thi = ct[ct["predictor"] == "thi"] if "predictor" in ct.columns else ct
+        if len(ct_thi) > 20:
+            ax2 = ax.twinx()
+
+            vals = ct_thi["day_fraction"].dropna().values
+            kde = gaussian_kde(vals, bw_method=0.3)
+            x_kde = np.linspace(0, 24, 200)
+            y_kde = kde(x_kde)
+
+            ax2.fill_between(x_kde, 0, y_kde, alpha=0.12,
+                            color="#009E73", zorder=0)
+            ax2.plot(x_kde, y_kde, color="#009E73", linewidth=1.5,
+                     linestyle="-", alpha=0.7,
+                     label=f"Crossing density (n={len(vals)})")
+            ax2.set_ylabel("Breakpoint crossing density", color="#009E73")
+            ax2.tick_params(axis="y", labelcolor="#009E73")
+            ax2.set_ylim(0, y_kde.max() * 2.5)  # leave room above
+
+            # Combine legends
+            lines1, labels1 = ax.get_legend_handles_labels()
+            lines2, labels2 = ax2.get_legend_handles_labels()
+            ax.legend(lines1 + lines2, labels1 + labels2,
+                      fontsize=9, loc="upper left")
+        else:
+            ax.legend(fontsize=9)
+    else:
+        ax.legend(fontsize=9)
+
+    ax.set_title("Rumen temperature circadian profile\n"
+                 "(cool days = null model, stress days = heat effect, "
+                 "green = crossing density)")
     fig.tight_layout()
     _save(fig, "circadian_null_model", out_dir)
 
