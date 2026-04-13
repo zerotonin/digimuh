@@ -1247,6 +1247,7 @@ def compute_event_triggered_average(
     rumen: pd.DataFrame, bs_results: pd.DataFrame,
     window: int = 36,
     min_gap: int = 6,
+    crossing_hour_range: tuple[int, int] | None = None,
 ) -> pd.DataFrame:
     """Peri-event average of rumen temperature around THI breakpoint crossings.
 
@@ -1260,6 +1261,9 @@ def compute_event_triggered_average(
         window: Half-window in 10-min samples (default 36 = 6 hours).
         min_gap: Minimum samples between events to avoid overlap
             (default 6 = 1 hour).
+        crossing_hour_range: If set, only include crossing events whose
+            clock hour falls within [start, end).  E.g. (8, 11) keeps
+            crossings at 8:00-10:59.  None = all hours.
 
     Returns:
         DataFrame with columns: animal_id, year, predictor, event_id,
@@ -1303,6 +1307,14 @@ def compute_event_triggered_average(
 
             if len(crossings) == 0:
                 continue
+
+            # Filter by clock hour if requested
+            if crossing_hour_range is not None:
+                h_start, h_end = crossing_hour_range
+                hours = pd.DatetimeIndex(ts[crossings]).hour
+                crossings = crossings[(hours >= h_start) & (hours < h_end)]
+                if len(crossings) == 0:
+                    continue
 
             # Filter: enforce minimum gap between events
             filtered = [crossings[0]]
@@ -1942,6 +1954,8 @@ def main() -> None:
     # ── 7. Event-triggered average ───────────────────────────
     section("Event-triggered average",
             "Rumen temp aligned to THI breakpoint upward crossings")
+
+    # Full ETA (all crossing times)
     eta_traces, eta_summary = compute_event_triggered_average(rumen, bs)
     eta_traces.to_csv(d / "event_triggered_traces.csv", index=False)
     eta_summary.to_csv(d / "event_triggered_summary.csv", index=False)
@@ -1950,7 +1964,27 @@ def main() -> None:
         for pred in ["thi", "temp"]:
             psub = eta_summary[eta_summary["predictor"] == pred]
             if not psub.empty:
-                kv(f"{pred.upper()} crossing events",
+                kv(f"{pred.upper()} crossing events (all hours)",
+                   f"{psub['n_events'].sum()} events from "
+                   f"{psub['animal_id'].nunique()} animals "
+                   f"(median {psub['n_events'].median():.0f}/animal)")
+
+    # Hour-filtered ETA (morning crossings only, configurable)
+    eta_hour_start = 8
+    eta_hour_end = 11
+    kv("", "")
+    kv(f"Hour-filtered ETA", f"{eta_hour_start}:00–{eta_hour_end}:00 only")
+
+    eta_filt_traces, eta_filt_summary = compute_event_triggered_average(
+        rumen, bs, crossing_hour_range=(eta_hour_start, eta_hour_end))
+    eta_filt_traces.to_csv(d / "event_triggered_traces_filtered.csv", index=False)
+    eta_filt_summary.to_csv(d / "event_triggered_summary_filtered.csv", index=False)
+
+    if not eta_filt_summary.empty:
+        for pred in ["thi", "temp"]:
+            psub = eta_filt_summary[eta_filt_summary["predictor"] == pred]
+            if not psub.empty:
+                kv(f"{pred.upper()} crossings ({eta_hour_start}–{eta_hour_end}h)",
                    f"{psub['n_events'].sum()} events from "
                    f"{psub['animal_id'].nunique()} animals "
                    f"(median {psub['n_events'].median():.0f}/animal)")
