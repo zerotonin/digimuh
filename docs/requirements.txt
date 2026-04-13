@@ -1,0 +1,6 @@
+# Docs build dependencies — pinned, separate from package dev deps.
+# Install with: pip install -r docs/requirements.txt
+sphinx>=7.0,<8.0
+furo>=2024.0
+myst-parser>=3.0
+sphinx-copybutton>=0.5
