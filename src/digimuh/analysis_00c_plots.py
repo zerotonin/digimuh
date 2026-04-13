@@ -1868,6 +1868,238 @@ def plot_longitudinal_breakpoints(bs: pd.DataFrame, out_dir: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────
+#  « longitudinal breakpoint stability Sankey »
+# ─────────────────────────────────────────────────────────────
+
+def plot_longitudinal_sankey(bs: pd.DataFrame, out_dir: Path) -> None:
+    """Sankey diagram showing how individual animal breakpoints change
+    between consecutive years.
+
+    Animals present in 2+ years are classified by their breakpoint
+    change (year N+1 minus year N) into five categories:
+
+        strongly decreased  (Δ < −3)
+        decreased           (−3 ≤ Δ < −1)
+        stable              (−1 ≤ Δ ≤ +1)
+        increased           (+1 < Δ ≤ +3)
+        strongly increased  (Δ > +3)
+
+    The Sankey shows the flow of animals between these categories
+    across each year transition.
+    """
+    import plotly.graph_objects as go
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Category definitions: (label, lower_bound, upper_bound)
+    CATS = [
+        ("strongly decreased", -np.inf, -3),
+        ("decreased",          -3,      -1),
+        ("stable",             -1,       1),
+        ("increased",           1,       3),
+        ("strongly increased",  3,       np.inf),
+    ]
+    CAT_COLOURS = {
+        "strongly decreased": "#0072B2",
+        "decreased":          "#56B4E9",
+        "stable":             "#999999",
+        "increased":          "#E69F00",
+        "strongly increased": "#D55E00",
+    }
+
+    def _hex_to_rgba(hex_colour: str, alpha: float = 0.4) -> str:
+        """Convert #RRGGBB to rgba(r, g, b, a) for plotly."""
+        h = hex_colour.lstrip("#")
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return f"rgba({r},{g},{b},{alpha})"
+
+    def _classify(delta: float) -> str:
+        for label, lo, hi in CATS:
+            if lo < delta <= hi if hi < np.inf else lo < delta:
+                return label
+            if lo == -np.inf and delta <= hi:
+                return label
+            if hi == np.inf and delta > lo:
+                return label
+        return "stable"
+
+    for bp_col, conv_col, bp_label, fname in [
+        ("thi_breakpoint", "thi_converged", "THI breakpoint", "sankey_longitudinal_thi"),
+        ("temp_breakpoint", "temp_converged", "Barn temp breakpoint", "sankey_longitudinal_temp"),
+    ]:
+        conv = bs[bs[conv_col] == True].dropna(subset=[bp_col])
+        if conv.empty:
+            continue
+
+        # Find repeat animals
+        year_counts = conv.groupby("animal_id")["year"].nunique()
+        repeat_ids = year_counts[year_counts >= 2].index
+        if len(repeat_ids) < 5:
+            log.info("  %s: too few repeat animals (%d), skipping Sankey",
+                     fname, len(repeat_ids))
+            continue
+
+        repeat = conv[conv["animal_id"].isin(repeat_ids)].copy()
+        repeat = repeat.sort_values(["animal_id", "year"])
+        years = sorted(repeat["year"].unique().astype(int))
+
+        if len(years) < 2:
+            continue
+
+        # Build transitions: for each consecutive year pair, classify
+        # each animal's breakpoint change
+        transitions = []
+        for i in range(len(years) - 1):
+            y1, y2 = years[i], years[i + 1]
+            d1 = repeat[repeat["year"] == y1].set_index("animal_id")[bp_col]
+            d2 = repeat[repeat["year"] == y2].set_index("animal_id")[bp_col]
+            shared = d1.index.intersection(d2.index)
+            for aid in shared:
+                delta = d2[aid] - d1[aid]
+                cat = _classify(delta)
+                transitions.append({
+                    "animal_id": aid,
+                    "y1": y1, "y2": y2,
+                    "transition": f"{y1}→{y2}",
+                    "bp_y1": d1[aid], "bp_y2": d2[aid],
+                    "delta": delta,
+                    "category": cat,
+                })
+
+        if not transitions:
+            continue
+
+        tdf = pd.DataFrame(transitions)
+
+        # Build Sankey: one column of nodes per transition, one row per category
+        cat_labels = [c[0] for c in CATS]
+        transition_labels = sorted(tdf["transition"].unique())
+
+        # Nodes: category × transition
+        node_labels = []
+        node_colours = []
+        node_x = []
+        node_y = []
+        node_idx = {}
+
+        for ti, tl in enumerate(transition_labels):
+            for ci, cat in enumerate(cat_labels):
+                idx = len(node_labels)
+                node_idx[(tl, cat)] = idx
+                node_labels.append(f"{cat}\n({tl})")
+                node_colours.append(CAT_COLOURS[cat])
+                # Position: x spread by transition, y spread by category
+                node_x.append(0.1 + 0.8 * ti / max(len(transition_labels) - 1, 1))
+                node_y.append(0.1 + 0.8 * ci / max(len(cat_labels) - 1, 1))
+
+        # Links: flow between categories across consecutive transitions
+        # For the first transition, just show the category counts as source
+        # For subsequent transitions, link from previous category to new category
+        link_source = []
+        link_target = []
+        link_value = []
+        link_colour = []
+
+        if len(transition_labels) == 1:
+            # Single transition: just show counts per category
+            # Use a dummy "all animals" source node
+            all_node = len(node_labels)
+            node_labels.append(f"All repeat\nanimals")
+            node_colours.append("#666666")
+            node_x.append(0.01)
+            node_y.append(0.5)
+
+            tl = transition_labels[0]
+            for cat in cat_labels:
+                count = len(tdf[(tdf["transition"] == tl) & (tdf["category"] == cat)])
+                if count > 0:
+                    link_source.append(all_node)
+                    link_target.append(node_idx[(tl, cat)])
+                    link_value.append(count)
+                    link_colour.append(_hex_to_rgba(CAT_COLOURS[cat]))
+        else:
+            # Multiple transitions: track individual animals across transitions
+            for ti in range(len(transition_labels) - 1):
+                tl1 = transition_labels[ti]
+                tl2 = transition_labels[ti + 1]
+
+                # Find animals present in both transitions
+                t1 = tdf[tdf["transition"] == tl1].set_index("animal_id")
+                t2 = tdf[tdf["transition"] == tl2].set_index("animal_id")
+                shared = t1.index.intersection(t2.index)
+
+                for aid in shared:
+                    cat1 = t1.loc[aid, "category"]
+                    cat2 = t2.loc[aid, "category"]
+                    # Find or create this flow
+                    src = node_idx[(tl1, cat1)]
+                    tgt = node_idx[(tl2, cat2)]
+
+                    # Check if link already exists
+                    found = False
+                    for li in range(len(link_source)):
+                        if link_source[li] == src and link_target[li] == tgt:
+                            link_value[li] += 1
+                            found = True
+                            break
+                    if not found:
+                        link_source.append(src)
+                        link_target.append(tgt)
+                        link_value.append(1)
+                        link_colour.append(_hex_to_rgba(CAT_COLOURS[cat1]))
+
+            # Also add flows into the first transition column (from a source node)
+            first_tl = transition_labels[0]
+            all_node = len(node_labels)
+            node_labels.append(f"Repeat animals\n(n={len(repeat_ids)})")
+            node_colours.append("#666666")
+            node_x.append(0.01)
+            node_y.append(0.5)
+
+            for cat in cat_labels:
+                count = len(tdf[(tdf["transition"] == first_tl) & (tdf["category"] == cat)])
+                if count > 0:
+                    link_source.append(all_node)
+                    link_target.append(node_idx[(first_tl, cat)])
+                    link_value.append(count)
+                    link_colour.append(_hex_to_rgba(CAT_COLOURS[cat]))
+
+        fig = go.Figure(go.Sankey(
+            arrangement="snap",
+            node=dict(
+                label=node_labels,
+                color=node_colours,
+                pad=15,
+                thickness=20,
+                x=node_x,
+                y=node_y,
+            ),
+            link=dict(
+                source=link_source,
+                target=link_target,
+                value=link_value,
+                color=link_colour,
+            ),
+        ))
+
+        n_animals = len(repeat_ids)
+        fig.update_layout(
+            title_text=(f"Breakpoint stability: {bp_label}<br>"
+                        f"<sub>{n_animals} animals across {len(years)} years "
+                        f"(Δ thresholds: ±1 stable, ±3 moderate, >3 strong)</sub>"),
+            font_size=11,
+            width=900,
+            height=500,
+            margin=dict(l=20, r=20, t=80, b=20),
+        )
+
+        fig.write_html(str(out_dir / f"{fname}.html"),
+                       include_plotlyjs="cdn")
+        log.info("  Saved %s.html (%d animals, %d transitions)",
+                 fname, n_animals, len(tdf))
+
+
+# ─────────────────────────────────────────────────────────────
 #  « threshold detection pipeline Sankey (plotly) »
 # ─────────────────────────────────────────────────────────────
 
@@ -2104,6 +2336,7 @@ def main() -> None:
         ("Climate ETA", lambda: plot_climate_eta(d)),
         ("TNF vs yield", lambda: plot_tnf_yield(d)),
         ("Longitudinal breakpoints", lambda: plot_longitudinal_breakpoints(bs, d)),
+        ("Longitudinal Sankey", lambda: plot_longitudinal_sankey(bs, d)),
         ("Sankey diagrams", lambda: plot_threshold_sankey(bs, d)),
     ]
 
