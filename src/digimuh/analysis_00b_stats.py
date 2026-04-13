@@ -1335,6 +1335,7 @@ def compute_event_triggered_average(
                 # Baseline-subtract body temp (mean of pre-event period)
                 pre_mean = np.mean(y[start:c])
                 for j, idx in enumerate(range(start, end)):
+                    t_point = pd.Timestamp(ts[idx])
                     traces.append({
                         "animal_id": aid, "year": year,
                         "predictor": prefix,
@@ -1345,6 +1346,7 @@ def compute_event_triggered_average(
                         "body_temp_centered": y[idx] - animal_mean_bt,
                         "body_temp_baseline": y[idx] - pre_mean,
                         "climate_val": x[idx],
+                        "clock_hour": t_point.hour,
                     })
 
             if event_count > 0:
