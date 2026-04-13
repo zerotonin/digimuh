@@ -1,5 +1,6 @@
 # DigiMuh
-
+![Tests](https://github.com/zerotonin/digimuh/actions/workflows/tests.yml/badge.svg)
+![Docs](https://github.com/zerotonin/digimuh/actions/workflows/docs.yml/badge.svg)
 > **🚧 Repository under construction** — core ingestion pipeline is functional;
 > analysis modules, views, and query helpers are coming next.
 
