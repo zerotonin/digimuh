@@ -1362,10 +1362,10 @@ def plot_event_triggered_average(
         n_events = sub.groupby(["animal_id", "year", "event_id"]).ngroups
         n_animals = sub["animal_id"].nunique()
 
-        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
         # ── Panel A: Climate signal ──────────────────────────
-        ax = axes[0]
+        ax = axes[0, 0]
         agg = sub.groupby("relative_minutes")["climate_val"].agg(["mean", "std", "count"])
         agg["sem"] = agg["std"] / np.sqrt(agg["count"])
 
@@ -1381,7 +1381,7 @@ def plot_event_triggered_average(
         ax.legend(fontsize=8)
 
         # ── Panel B: Raw rumen temperature ──────────────────
-        ax = axes[1]
+        ax = axes[0, 1]
         agg_raw = sub.groupby("relative_minutes")["body_temp"].agg(
             ["mean", "std", "count"])
         agg_raw["sem"] = agg_raw["std"] / np.sqrt(agg_raw["count"])
@@ -1398,7 +1398,7 @@ def plot_event_triggered_average(
         ax.legend(fontsize=8)
 
         # ── Panel C: Rumen temp baseline-subtracted ──────────
-        ax = axes[2]
+        ax = axes[1, 0]
         agg_bl = sub.groupby("relative_minutes")["body_temp_baseline"].agg(
             ["mean", "std", "count"])
         agg_bl["sem"] = agg_bl["std"] / np.sqrt(agg_bl["count"])
@@ -1432,10 +1432,98 @@ def plot_event_triggered_average(
         ax.set_title("(C) Rumen temperature\n(pre-event baseline subtracted)")
         ax.legend(fontsize=8)
 
-        fig.suptitle(f"Event-triggered average: {pred_label}",
+        # ── Panel D: Additional rumen temperature ────────────
+        #    raw body_temp minus cool-day circadian profile at that clock hour
+        ax = axes[1, 1]
+        circadian_path = out_dir / "circadian_null_model.csv"
+        has_clock = "clock_hour" in sub.columns
+        has_circ = circadian_path.exists()
+
+        if has_circ and has_clock:
+            circ = pd.read_csv(circadian_path)
+            cool = circ[circ["day_type"] == "cool"]
+
+            if not cool.empty:
+                # Per-animal hourly cool-day lookup
+                cool_lookup = {}
+                for _, crow in cool.iterrows():
+                    cool_lookup[(int(crow["animal_id"]), int(crow["year"]),
+                                 int(crow["hour"]))] = crow["body_temp_mean"]
+                # Grand mean fallback per hour
+                grand_cool = cool.groupby("hour")["body_temp_mean"].mean().to_dict()
+
+                sub_d = sub.copy()
+
+                def _get_cool(row):
+                    key = (int(row["animal_id"]), int(row["year"]),
+                           int(row["clock_hour"]))
+                    v = cool_lookup.get(key)
+                    if v is None:
+                        v = grand_cool.get(int(row["clock_hour"]))
+                    return v
+
+                cool_vals = sub_d.apply(_get_cool, axis=1)
+                sub_d["additional_temp"] = sub_d["body_temp"] - cool_vals
+                valid = sub_d.dropna(subset=["additional_temp"])
+
+                if len(valid) > 100:
+                    agg_add = valid.groupby("relative_minutes")["additional_temp"].agg(
+                        ["mean", "std", "count"])
+                    agg_add["sem"] = agg_add["std"] / np.sqrt(agg_add["count"])
+
+                    ax.fill_between(agg_add.index,
+                                   agg_add["mean"] - agg_add["sem"],
+                                   agg_add["mean"] + agg_add["sem"],
+                                   alpha=0.2, color=COLOURS["above_bp"])
+                    ax.plot(agg_add.index, agg_add["mean"],
+                            color=COLOURS["above_bp"], linewidth=2)
+                    ax.axvline(0, color="#333", linewidth=1.5, linestyle="--",
+                               label="Breakpoint crossing")
+                    ax.axhline(0, color="#999", linewidth=0.5, linestyle="--",
+                               label="Cool-day circadian level")
+
+                    # Onset detection
+                    post = agg_add.loc[agg_add.index >= 0]
+                    if len(post) > 2:
+                        onset = post[post["mean"] > 2 * post["sem"].iloc[0]].index
+                        if len(onset) > 0:
+                            onset_min = onset[0]
+                            onset_val = agg_add.loc[onset_min, "mean"]
+                            ax.axvline(onset_min, color=COLOURS["above_bp"],
+                                       linewidth=1, linestyle=":", alpha=0.7)
+                            ax.annotate(
+                                f"Response onset\n{onset_min:.0f} min",
+                                xy=(onset_min, onset_val),
+                                xytext=(onset_min + 40, onset_val + 0.01),
+                                fontsize=9, color=COLOURS["above_bp"],
+                                arrowprops=dict(arrowstyle="->",
+                                               color=COLOURS["above_bp"], lw=1),
+                            )
+                else:
+                    ax.text(0.5, 0.5, "Insufficient cool-day data",
+                            transform=ax.transAxes, ha="center")
+            else:
+                ax.text(0.5, 0.5, "No cool-day data available",
+                        transform=ax.transAxes, ha="center")
+        else:
+            missing = []
+            if not has_circ:
+                missing.append("circadian_null_model.csv")
+            if not has_clock:
+                missing.append("clock_hour column")
+            ax.text(0.5, 0.5, f"Missing: {', '.join(missing)}\nRe-run stats.",
+                    transform=ax.transAxes, ha="center", fontsize=9)
+
+        ax.set_xlabel("Time relative to crossing (minutes)")
+        ax.set_ylabel("Additional rumen temperature (°C)")
+        ax.set_title("(D) Additional rumen temperature\n"
+                     "(surplus above cool-day circadian profile)")
+        ax.legend(fontsize=8)
+
+        fig.suptitle(f"Event-triggered average: {pred_label}{title_extra}",
                      fontsize=13, fontweight="bold")
         fig.tight_layout()
-        _save(fig, f"eta_{pred}", out_dir)
+        _save(fig, f"eta_{pred}{suffix}", out_dir)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1894,7 +1982,6 @@ def main() -> None:
         ("THI daily profile", lambda: plot_thi_daily_profile(d)),
         ("Crossing raster", lambda: plot_crossing_raster(d)),
         ("Derivative CCF", lambda: plot_derivative_ccf(d)),
-        ("Event-triggered average", lambda: plot_event_triggered_average(d)),
         ("Event-triggered average (8-11h)", lambda: plot_event_triggered_average(
             d, traces_file="event_triggered_traces_filtered.csv",
             suffix="_8to11h", title_extra=" (crossings 8:00–11:00 only)")),
