@@ -61,11 +61,11 @@ progress = [
 ]
 
 [project.scripts]
-digimuh-ingest = "digimuh.ingest_cow_db:main"
-digimuh-broken-stick = "digimuh.analysis_00_broken_stick:main"
-digimuh-extract = "digimuh.analysis_00a_extract:main"
-digimuh-stats = "digimuh.analysis_00b_stats:main"
-digimuh-plots = "digimuh.analysis_00c_plots:main"
+digimuh-ingest    = "digimuh.ingest:main"
+digimuh-extract   = "digimuh.extract:main"
+digimuh-stats     = "digimuh.stats_runner:main"
+digimuh-plots     = "digimuh.viz_runner:main"
+digimuh-frontiers = "digimuh.run_frontiers_2026:main"
 digimuh-config = "digimuh.config:main"
 digimuh-ketosis = "digimuh.analysis_01_ketosis:main"
 digimuh-heat = "digimuh.analysis_03_heat_stress:main"

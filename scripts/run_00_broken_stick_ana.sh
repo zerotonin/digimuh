@@ -1,14 +1,10 @@
 #!/usr/bin/env bash
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  Run Analysis 0 — Broken-stick pipeline                      ║
-# ║  Uses config from ~/.config/digimuh/config.yaml              ║
-# ║  CLI args override config. Run digimuh-config to set up.     ║
-# ║                                                              ║
-# ║  Usage:                                                      ║
-# ║    bash scripts/run_00_broken_stick_ana.sh                   ║
-# ║    bash scripts/run_00_broken_stick_ana.sh --no-resp          ║
-# ║    bash scripts/run_00_broken_stick_ana.sh --tierauswahl X.xlsx  ║
+# ║  DEPRECATED — use run_frontiers_2026.sh or digimuh-frontiers ║
 # ╚══════════════════════════════════════════════════════════════╝
+echo "⚠  DEPRECATED: use 'digimuh-frontiers' or 'scripts/run_frontiers_2026.sh'"
+echo "   Forwarding arguments …"
+echo ""
 
 set -e
 
@@ -26,11 +22,6 @@ for arg in "$@"; do
     fi
 done
 
-# Step 1: extract (slow, hits DB)
 digimuh-extract "${EXTRACT_ARGS[@]}"
-
-# Step 2: stats (fast, reads CSVs)
 digimuh-stats --data results/broken_stick $NO_RESP $FRONTIERS
-
-# Step 3: plots (fast, reads CSVs)
 digimuh-plots --data results/broken_stick
