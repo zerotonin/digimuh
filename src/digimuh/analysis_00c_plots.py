@@ -1994,10 +1994,17 @@ def plot_longitudinal_sankey(bs: pd.DataFrame, out_dir: Path) -> None:
             continue
 
         year_counts = conv.groupby("animal_id")["year"].nunique()
-        repeat_ids = year_counts[year_counts >= 2].index
-        if len(repeat_ids) < 5:
-            log.info("  %s: too few repeat animals (%d), skipping", fname, len(repeat_ids))
+        n_years_available = conv["year"].nunique()
+        # Only animals present in ALL years (ensures complete flow across
+        # all transitions — animals in 2-3 years create sparse, unreadable flows)
+        repeat_ids = year_counts[year_counts == n_years_available].index
+        if len(repeat_ids) < 3:
+            log.info("  %s: too few animals in all %d years (%d), skipping",
+                     fname, n_years_available, len(repeat_ids))
             continue
+
+        log.info("  %s: %d animals present in all %d years",
+                 fname, len(repeat_ids), n_years_available)
 
         repeat = conv[conv["animal_id"].isin(repeat_ids)].copy()
         repeat = repeat.sort_values(["animal_id", "year"])
