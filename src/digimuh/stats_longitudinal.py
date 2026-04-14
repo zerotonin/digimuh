@@ -15,6 +15,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from digimuh.stats_core import benjamini_hochberg, p_to_stars
 
 log = logging.getLogger("digimuh.stats")
 
