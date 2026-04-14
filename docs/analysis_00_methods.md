@@ -1,6 +1,6 @@
 # Analysis 0 — Individual heat stress thresholds
 
-**Pipeline version:** 0.3.0
+**Pipeline version:** 0.4.0
 **Authors:** Bart R. H. Geurten (University of Otago), Gundula Hoffmann (ATB Potsdam)
 **Target:** Frontiers in Animal Science
 
@@ -12,256 +12,161 @@ Three independent scripts, each reading CSVs from the previous step:
 ```
   digimuh-extract  (DB → CSV, runs once)
         │  rumen_barn.csv, respiration_barn.csv,
-        │  production.csv, climate_daily.csv
+        │  production.csv, daily_milk_yield.csv, climate_daily.csv
         ▼
-  digimuh-stats    (CSV → statistics, seconds)
-        │  broken_stick_results.csv, statistical_tests.csv, ...
+  digimuh-stats    (CSV → statistics + analysis CSVs)
+        │  broken_stick_results.csv, cross_correlation.csv,
+        │  circadian_null_model.csv, crossing_times.csv,
+        │  event_triggered_traces.csv, climate_eta.csv,
+        │  thermoneutral_fraction.csv, tnf_yield.csv, ...
         ▼
-  digimuh-plots    (CSV → SVG/PNG figures, seconds)
+  digimuh-plots    (CSV → SVG/PNG figures)
 ```
 
 
 ## 2. Data extraction (analysis_00a_extract.py)
 
-For each of 220 animal-years in the Tierauswahl:
+For each of 255 animal-years in the extended Tierauswahl:
 
-**Rumen temperature:** `temp_without_drink_cycles` from `smaxtec_derived`,
-filtered to 30-43 C, joined with hourly barn climate (Neubau sensors
-only, `barn_id IN (1,2)`), milking hours excluded (04-07, 16-19).
+**Rumen temperature:** `temp_without_drink_cycles` from `smaxtec_derived`, filtered to 30-43 C, joined with barn climate via `pd.merge_asof` with nearest-time matching within 30 min tolerance.  This preserves native barn sensor resolution (~10 min for smaXtec) rather than collapsing to hourly averages.  Barn sensors: Neubau only (`barn_id IN (1,2)`).  Milking hours excluded (04-07, 16-19).
 
-**Drinking correction:** By default, timestamps with `drink_cycles_v2 > 0`
-plus a 15-min recovery window are excluded.  Flag `--smaxtec-drink-correction`
-disables this and relies solely on smaXtec's built-in correction.
+**Drinking correction:** Timestamps with `drink_cycles_v2 > 0` plus a 15-min recovery window are excluded by default.
 
-**Respiration:** `respirationfrequency` from `gouna`, filtered to 5-150 bpm,
-same barn join and milking exclusion.  Available from Aug 2022 onward.
+**Respiration:** `respirationfrequency` from `gouna`, filtered to 5-150 bpm, same barn join and milking exclusion.  Available from Aug 2022.
 
-**Production:** Mean milk yield per observation window, lactation number
-from full animal history.
+**Production:** Mean milk yield per observation window and daily milk yield per cow (for thermoneutral fraction analysis), lactation number from full animal history.
 
 
 ## 3. Statistical analysis (analysis_00b_stats.py)
 
 ### 3.1 Broken-stick regression
 
-Two-segment piecewise linear model per animal:
+Two-segment piecewise linear model per animal.  Breakpoint psi found by grid search (200 points) + bounded minimisation.  Biological constraint: `b2 > b1` and `b2 > 0`.  Search ranges: THI 45-80, barn temp 5-35 C.
 
-    y = a1 + b1*x    if x <= psi
-    y = a2 + b2*x    if x > psi
+### 3.2 Breakpoint existence tests (reserved for COMPAG)
 
-Breakpoint psi found by grid search (200 points) + bounded minimisation.
-Biological constraint: `b2 > b1` and `b2 > 0`.
+Davies test (Davies 1987, 2002) and pseudo-Score test (Muggeo 2016).  Skipped with `--frontiers` flag.
 
-Four models per animal: body temp vs THI, body temp vs barn temp,
-respiration vs THI, respiration vs barn temp.
+### 3.3 Four-parameter logistic (Hill) fit (reserved for COMPAG)
 
-Search ranges: THI 45-80, barn temp 5-35 C.
+Sigmoidal dose-response model with lower bend point (Sebaugh & McCray 2003).
 
-### 3.2 Breakpoint existence tests
+### 3.4 Below/above breakpoint comparison
 
-Two formal tests for H0: "no breakpoint exists" (the relationship is
-a single straight line) vs H1: "there is a slope change."
+Within-year Fisher resampling tests (reRandomStats, Geurten 2026) on per-animal means below vs above the individual THI breakpoint.  Median difference, 20,000 permutations, BH-FDR corrected.
 
-**Davies test (Davies 1987, 2002):**
-Evaluates k=10 candidate breakpoints, computes the t-statistic for the
-slope-difference coefficient at each, takes max|t|, corrects p-value
-using Davies' upper bound for the multiple-search problem.
+### 3.5 Rumen temperature circadian null model
 
-**Pseudo-Score test (Muggeo 2016):**
-Averages the segmented variable over k candidates, tests whether this
-averaged term is significant in the augmented linear model.  More
-powerful than Davies for single changepoints (Muggeo 2016, D'Angelo
-et al. 2025).
+Cow-days classified as cool (THI stayed below breakpoint all day) or stress (THI exceeded breakpoint).  Mean rumen temperature computed at each clock hour for each category.  The cool-day profile is the circadian null model.  The stress-minus-cool difference at each hour isolates the heat effect from the circadian rhythm.
 
-These tests answer "is the relationship nonlinear?" before any threshold
-model is fitted.  A significant Davies/pscore p-value means the slope
-changes somewhere, but does not specify whether the change is sharp
-(broken-stick) or gradual (Hill/sigmoid).
+### 3.6 THI daily exceedance profile
 
-### 3.3 Four-parameter logistic (Hill) fit
+Mean barn THI by clock hour and month (June-September), with herd median THI breakpoint as reference.  Shows when heat stress begins and ends each day and how this shifts seasonally.
 
-Sigmoidal dose-response model:
+### 3.7 Breakpoint crossing event detection
 
-    y = y_min + (y_max - y_min) / (1 + (EC50 / x)^n)
+Upward crossings: consecutive readings where barn THI transitions from at-or-below to above the cow's individual breakpoint.  Crossings at data gaps > 30 min (milking exclusion boundaries) are rejected to prevent false detection.
 
-Fitted via constrained nonlinear least squares (`scipy.optimize.curve_fit`).
+### 3.8 Crossing time raster
 
-**Parameters:**
-- `EC50`: predictor value at half-maximal response (midpoint, not onset)
-- `n` (Hill coefficient): steepness of transition; large n = sharp switch,
-  small n = gradual acceleration
-- `y_min`, `y_max`: lower and upper asymptotes
+Clock time of each crossing event per animal, used for the activation raster plot and KDE crossing density overlaid on the circadian null model.
 
-**Lower bend point (Sebaugh & McCray 2003):**
+### 3.9 Cross-correlation and cross-covariance
 
-The EC50 is the midpoint, not the onset.  The onset is defined as the
-lower bend point: the x-value where the second derivative of the Hill
-curve equals zero, marking the transition from the baseline plateau
-into the rising phase:
+Time series split at individual breakpoint.  Raw and per-day-detrended CCF at lags +/-240 min (10-min steps).  The raw CCF contains a diurnal artifact (shared 24h cycle produces sinusoidal CCF); this is retained for methodological discussion.
 
-    x_bend_lower = EC50 * ((n - 1) / (n + 1))^(1/n)    for n > 1
+### 3.10 Event-triggered average (ETA)
 
-For n <= 1 (no lower inflection), we fall back to EC10:
+Peri-event average of rumen temperature aligned to crossing events.  Clock hour filter (default 8:00-11:00).  Four panels: (A) climate signal, (B) raw rumen temp, (C) baseline-subtracted, (D) additional rumen temp (raw minus cool-day circadian profile at that clock hour).
 
-    x_bend_lower = EC50 * (0.10 / 0.90)^(1/n)
+### 3.11 Climate ETA
 
-This lower bend point is directly comparable to the broken-stick
-breakpoint: both represent "where the response starts to deviate
-from the baseline."
+Both barn THI and barn temperature extracted +/-6 hours around each crossing, normalised by subtracting the cow's individual breakpoint.  y=0 = threshold.  Dual y-axis showing both delta-THI and delta-barn-temperature.
 
-**Reference:**
-Sebaugh JL, McCray PD (2003) Defining the linear portion of a
-sigmoid-shaped curve: bend points. Pharmaceutical Statistics 2:167-174.
+### 3.12 Thermoneutral fraction (TNF) vs milk yield
 
-### 3.4 Interpretation of the three methods together
+Daily TNF = fraction of readings where barn THI <= cow's breakpoint.  Yield normalised to cow-specific P95 (95th percentile of daily yields).  Spearman correlation: pooled and per-cow within-animal.  Heat-stress-only filter at TNF thresholds 0.95/0.90/0.80/0.70.
 
-| Davies/pscore p | BS converges | Hill converges | Interpretation |
-|---|---|---|---|
-| p < 0.05 | Yes | Yes | Sharp threshold; use BS breakpoint |
-| p < 0.05 | No  | Yes | Gradual onset; use Hill lower bend |
-| p < 0.05 | No  | No  | Nonlinear but neither model fits |
-| p >= 0.05 | Yes | Yes | Spurious; no real threshold (Breit 2023) |
-| p >= 0.05 | No  | No  | Linear relationship, no threshold |
+### 3.13 Breakpoint stability
 
-The decision logic: always run Davies/pscore first to test whether a
-threshold exists.  If significant, fit both broken-stick and Hill.  If
-broken-stick converges, use it (sharp threshold confirmed).  If only
-Hill converges, use the lower bend point (gradual onset).
+ICC for repeat animals.  Pairwise year comparisons via Fisher resampling (BH-FDR).
 
-### 3.5 Spearman correlations
+### 3.14 Longitudinal breakpoint stability (alluvial)
 
-Per-animal Spearman rs between each signal and each predictor.
-
-### 3.6 Below/above breakpoint comparison
-
-For converged animals: within-year Fisher resampling tests (from the
-reRandomStats package, Geurten 2026) on per-animal means below vs above
-the individual THI breakpoint.  The test statistic is the median
-difference, with 20,000 permutations.  BH-FDR corrected across all
-tests within a year.
-
-The Fisher resampling test is a permutation-based two-sample test that
-makes no distributional assumptions, making it more appropriate than the
-Wilcoxon signed-rank test for our data where sample sizes vary greatly
-between years and normality cannot be assumed.
-
-**Reference:**
-Geurten BRH (2026) reRandomStats: Re-randomisation Statistics Toolkit.
-https://github.com/zerotonin/rerandomstats
-
-### 3.7 Cross-correlation and cross-covariance below/above breakpoint
-
-For each animal with a converged breakpoint, the time series is split
-into readings below and above the breakpoint.  For each region, the
-normalised cross-correlation function (CCF) and raw cross-covariance
-are computed between the climate predictor (THI or barn temperature)
-and rumen temperature at lags from -120 to +120 minutes (in 10-minute
-steps matching the sensor sampling interval).
-
-Positive lags mean the climate signal leads the rumen temperature
-response.  This characterises how quickly the cow's thermoregulatory
-system responds to environmental changes, and whether the coupling
-strength differs between the thermoneutral zone (below breakpoint)
-and the heat stress zone (above breakpoint).
-
-Expected pattern: below the breakpoint, cross-correlation at lag 0
-should be weak (homeostatic regulation buffers the signal).  Above the
-breakpoint, cross-correlation should be stronger and may show a time
-lag of 30-60 minutes (the thermal inertia of the rumen).
-
-**Output:** `cross_correlation.csv` with columns: animal_id, year,
-predictor, region, lag, lag_minutes, xcorr, xcov, n.
-
-### 3.8 Breakpoint stability
-
-ICC for repeat animals appearing in multiple years.
+Animals in 2+ years classified by year-to-year breakpoint change: strongly decreased (delta < -3), decreased (-3 to -1), stable (-1 to +1), increased (+1 to +3), strongly increased (delta > +3).  Alluvial plot tracks individual animal flow between categories across consecutive year transitions.
 
 
-## 4. Plotting (analysis_00c_plots.py)
+## 4. Figures (analysis_00c_plots.py)
 
-All figures use the Wong (2011) colourblind-safe palette.
+All figures use the Wong (2011) colourblind-safe palette.  SVG + PNG output.
 
 | Figure | Description |
 |---|---|
-| Grouped boxplots | Rumen vs respiration breakpoints per year |
-| Paired below/above | Boxplots with significance brackets (BH-FDR stars) |
-| Paired rumen vs resp | Same-animal breakpoint comparison |
-| Spearman histograms | Per-animal correlation distributions |
-| Climate time series | Daily barn THI/temp per summer |
-| Predictors | Breakpoint vs milk yield and lactation (Pearson) |
-| Stability scatter | Year-to-year THI breakpoints with ICC |
-| Example fits | Best-R2 animal per model (rumen + resp) |
+| `circadian_null_model` | 2-panel: (A) cool/stress profiles + crossing density, (B) difference curve |
+| `thi_daily_profile_*` | Barn THI by clock hour and month with herd bp line |
+| `crossing_raster_*` | Activation raster (animals x clock time) + raincloud |
+| `xcorr_*` / `xcov_*` | Cross-correlation/covariance below vs above bp |
+| `eta_*_8to11h` | 2x2 event-triggered average (8-11h crossings) |
+| `climate_eta_*` | Delta-THI + Delta-Temp around crossings (dual y-axis) |
+| `grouped_boxplots_*` | Breakpoint distributions per year |
+| `paired_below_above_*` | Boxplots + significance brackets (BH-FDR) |
+| `spearman_*` | Per-animal correlation distributions |
+| `tnf_yield` | TNF vs daily milk yield (absolute + relative) |
+| `longitudinal_*` | Breakpoint trajectories (repeat animals) |
+| `sankey_longitudinal_*` | Alluvial: stability categories across year transitions |
 
 
 ## 5. Output files
 
 ```
 results/broken_stick/
-├── rumen_barn.csv              Rumen temp + barn climate per reading
-├── respiration_barn.csv        Respiration + barn climate per reading
-├── production.csv              Milk yield + lactation per animal
-├── climate_daily.csv           Daily barn climate
-├── broken_stick_results.csv    Per-animal: breakpoints, Davies/pscore p,
-│                               Hill EC50/n/lower_bend, convergence flags
-├── spearman_correlations.csv
-├── behavioural_response.csv
-├── statistical_tests.csv       Fisher resampling tests with BH-FDR
-├── cross_correlation.csv       CCF and cross-covariance below/above bp
-├── breakpoint_stability.csv
-├── summary_table.csv
-└── *.svg / *.png               All figures
+  rumen_barn.csv                 Rumen temp + barn climate per reading
+  respiration_barn.csv           Respiration + barn climate per reading
+  production.csv                 Mean milk yield + lactation per animal
+  daily_milk_yield.csv           Daily milk yield per cow
+  climate_daily.csv              Daily barn climate (Jun-Sep)
+  broken_stick_results.csv       Per-animal breakpoints + convergence
+  spearman_correlations.csv
+  behavioural_response.csv       Per-animal means below/above bp
+  statistical_tests.csv          Fisher resampling + BH-FDR
+  cross_correlation.csv          CCF + xcov (raw + detrended)
+  derivative_ccf.csv             d(climate)/dt vs d(body_temp)/dt
+  circadian_null_model.csv       Hourly rumen temp: cool vs stress days
+  thi_daily_profile.csv          Barn THI by clock hour and month
+  crossing_times.csv             Clock time of each crossing event
+  event_triggered_traces*.csv    Peri-event traces (all + filtered)
+  event_triggered_summary*.csv   Event counts per animal
+  climate_eta.csv                THI + barn temp around crossings
+  thermoneutral_fraction.csv     Daily TNF per cow
+  tnf_yield.csv                  TNF + daily yield + P95
+  breakpoint_stability.csv       ICC pairs
+  summary_table.csv
+  *.svg / *.png                  All figures
 ```
 
 
 ## 6. Running the pipeline
 
 ```bash
-# Full pipeline (rumen temp + respiration)
+# Full pipeline
+bash scripts/run_00_broken_stick_ana.sh --frontiers --no-resp
+
+# Or step by step:
 digimuh-extract
-digimuh-stats --data results/broken_stick
+digimuh-stats --data results/broken_stick --frontiers --no-resp
 digimuh-plots --data results/broken_stick
-
-# Frontiers paper (rumen temperature only, no respiration)
-digimuh-stats --data results/broken_stick --no-resp
-digimuh-plots --data results/broken_stick
-
-# Or via the run script
-bash scripts/run_00_broken_stick_ana.sh
-bash scripts/run_00_broken_stick_ana.sh --no-resp
 ```
 
 
-## 7. Key columns in broken_stick_results.csv
-
-Per-animal, per-model prefix (`thi_`, `temp_`, `resp_thi_`, `resp_temp_`):
-
-| Column suffix | Description |
-|---|---|
-| `_breakpoint` | Broken-stick breakpoint (NaN if not converged) |
-| `_converged` | Broken-stick slope constraint passed |
-| `_slope_below/above` | Segment slopes |
-| `_r_squared` | Broken-stick R2 |
-| `_davies_p` | Davies test p-value for breakpoint existence |
-| `_pscore_p` | Pseudo-Score test p-value |
-| `_hill_ec50` | Hill midpoint (half-maximal response) |
-| `_hill_n` | Hill coefficient (steepness) |
-| `_hill_bend` | Lower bend point (Sebaugh & McCray 2003 onset) |
-| `_hill_r2` | Hill model R2 |
-| `_hill_converged` | Hill fit succeeded |
-
-
-## 8. References
+## 7. References
 
 - Benjamini Y, Hochberg Y (1995) J R Stat Soc B 57:289-300.
-- Breit M et al. (2023) Multivariate Behavioral Research.
-- D'Angelo et al. (2025) Statistics in Medicine.
 - Davies RB (1987) Biometrika 74:33-43.
 - Davies RB (2002) Biometrika 89:484-489.
+- Geurten BRH (2026) reRandomStats. github.com/zerotonin/rerandomstats
 - Hoffmann G et al. (2020) Biosystems Engineering 199:83-96.
 - Muggeo VMR (2003) Statistics in Medicine 22:3055-3071.
 - Muggeo VMR (2016) J Stat Comput Simul 86:3059-3067.
-- Neira M et al. (2026) PLOS Climate 5:e0000761.
-- Pinto S et al. (2020) J Thermal Biology 88:102523.
+- Piccione G et al. (2014) Biological Rhythm Research 45:371-381.
 - Sebaugh JL, McCray PD (2003) Pharmaceutical Statistics 2:167-174.
-- Wang X et al. (2018) J Thermal Biology 77:24-37.
 - Wong B (2011) Nature Methods 8:441.
