@@ -1926,17 +1926,140 @@ def plot_longitudinal_breakpoints(bs: pd.DataFrame, out_dir: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────
+#  « breakpoint crossing count raincloud per year »
+# ─────────────────────────────────────────────────────────────
+
+def plot_breakpoint_raincloud(out_dir: Path) -> None:
+    """Raincloud plots of annual breakpoint crossing counts per animal.
+
+    For each animal-year, counts how many times the barn THI (or barn
+    temp) crossed that animal's individual breakpoint upward.  Reads
+    crossing events from ``crossing_times.csv`` (produced by stats).
+
+    Each year gets a horizontal raincloud: half-violin (KDE), jittered
+    scatter of integer counts, and boxplot.  Shows whether cows
+    experience more threshold exceedances over time (climate signal).
+    """
+    import matplotlib.pyplot as plt
+    from scipy.stats import gaussian_kde, kruskal
+    _setup()
+
+    path = out_dir / "crossing_times.csv"
+    if not path.exists():
+        log.info("  crossing_times.csv not found, skipping crossing count raincloud")
+        return
+
+    ct = pd.read_csv(path)
+    if ct.empty:
+        return
+
+    for pred, pred_label, fname in [
+        ("thi", "THI breakpoint", "raincloud_crossing_count_thi"),
+        ("temp", "Barn temp breakpoint", "raincloud_crossing_count_temp"),
+    ]:
+        sub = ct[ct["predictor"] == pred]
+        if sub.empty:
+            continue
+
+        # Count crossings per animal per year
+        counts = (sub.groupby(["animal_id", "year"])
+                     .size()
+                     .reset_index(name="n_crossings"))
+
+        years = sorted(counts["year"].unique().astype(int))
+        if len(years) < 2:
+            continue
+
+        year_data = [counts[counts["year"] == y]["n_crossings"].values
+                     for y in years]
+
+        fig, ax = plt.subplots(figsize=(10, 1.5 + 1.4 * len(years)))
+
+        for i, (y, vals) in enumerate(zip(years, year_data)):
+            y_pos = i
+            colour = COLOURS["year"].get(y, COLOURS["below_bp"])
+
+            # Half-violin (KDE) — above row centre
+            if len(vals) > 5:
+                kde = gaussian_kde(vals, bw_method=0.3)
+                x_kde = np.linspace(
+                    max(0, vals.min() - 5), vals.max() + 5, 200)
+                density = kde(x_kde)
+                density_scaled = density / density.max() * 0.38
+                ax.fill_between(x_kde, y_pos, y_pos + density_scaled,
+                                alpha=0.3, color=colour)
+                ax.plot(x_kde, y_pos + density_scaled,
+                        color=colour, linewidth=1.2)
+
+            # Jittered scatter — below row centre
+            jitter = np.random.uniform(-0.15, -0.35, len(vals))
+            ax.scatter(vals, y_pos + jitter, s=10, alpha=0.5,
+                       color=colour, edgecolors="none", zorder=3)
+
+            # Boxplot — at row centre
+            ax.boxplot(
+                vals, positions=[y_pos - 0.02], widths=0.12,
+                vert=False, patch_artist=True,
+                boxprops=dict(facecolor=colour, alpha=0.5,
+                              edgecolor="#333"),
+                medianprops=dict(color="#333", linewidth=2),
+                whiskerprops=dict(color="#333"),
+                capprops=dict(color="#333"),
+                flierprops=dict(marker="o", markersize=2, alpha=0.3),
+                manage_ticks=False,
+            )
+
+            # n animals + median label
+            n_animals = len(vals)
+            med = int(np.median(vals))
+            ax.text(ax.get_xlim()[0] if ax.get_xlim()[0] != 0 else
+                    max(0, vals.min() - 8),
+                    y_pos - 0.38,
+                    f"n={n_animals}, median={med}",
+                    fontsize=8, color="#666", va="center")
+
+        # Kruskal-Wallis across years
+        valid_groups = [v for v in year_data if len(v) >= 3]
+        if len(valid_groups) >= 2:
+            try:
+                stat, p = kruskal(*valid_groups)
+                ax.text(0.99, 0.02,
+                        f"Kruskal-Wallis H={stat:.1f}, p={p:.3g}",
+                        transform=ax.transAxes, ha="right",
+                        va="bottom", fontsize=9, color="#333",
+                        bbox=dict(boxstyle="round,pad=0.3",
+                                  facecolor="white", alpha=0.8))
+            except ValueError:
+                pass
+
+        ax.set_yticks(range(len(years)))
+        ax.set_yticklabels([str(y) for y in years], fontsize=11)
+        ax.set_xlabel(f"Number of {pred_label} crossings per animal")
+        ax.set_title(
+            f"Annual {pred_label} crossing count per animal",
+            fontsize=13, fontweight="bold")
+        ax.set_xlim(left=0)
+        ax.invert_yaxis()
+        fig.tight_layout()
+        _save(fig, fname, out_dir)
+
+
+# ─────────────────────────────────────────────────────────────
 #  « longitudinal breakpoint stability Sankey »
 # ─────────────────────────────────────────────────────────────
 
 def plot_longitudinal_sankey(bs: pd.DataFrame, out_dir: Path) -> None:
-    """Alluvial plot showing how animal breakpoints change across year
-    transitions.
+    """Alluvial plot tracking breakpoint adaptation across years.
 
-    Matplotlib-based (SVG output).  Each column is a year transition,
-    stacked rectangles show the five Δ-breakpoint categories.  Bezier
-    bands connect categories between adjacent transitions, tracking
-    individual animals.  Counts annotated on each rectangle and flow.
+    Closed cohort: only animals with a converged breakpoint in every
+    study year are included.  Column 0 is the baseline year (all
+    animals start as "stable").  Subsequent columns show the year-
+    to-year Δ category (strongly decreased / decreased / stable /
+    increased / strongly increased).  Bezier bands track individual
+    animals between columns.
+
+    Duplicate entries per animal-year (multiple date_enter) are
+    resolved by averaging breakpoints before computing deltas.
     """
     import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
@@ -1969,7 +2092,8 @@ def plot_longitudinal_sankey(bs: pd.DataFrame, out_dir: Path) -> None:
                 return label
         return "stable"
 
-    def _bezier_band(ax, x0, y0_bot, y0_top, x1, y1_bot, y1_top, colour, alpha=0.35):
+    def _bezier_band(ax, x0, y0_bot, y0_top, x1, y1_bot, y1_top,
+                     colour, alpha=0.35):
         """Draw a curved band between two vertical extents."""
         xm = (x0 + x1) / 2
         verts = [
@@ -1983,83 +2107,83 @@ def plot_longitudinal_sankey(bs: pd.DataFrame, out_dir: Path) -> None:
             MplPath.CLOSEPOLY,
         ]
         ax.add_patch(mpatches.PathPatch(
-            MplPath(verts, codes), facecolor=colour, edgecolor="none", alpha=alpha))
+            MplPath(verts, codes), facecolor=colour, edgecolor="none",
+            alpha=alpha))
 
     for bp_col, conv_col, bp_label, fname in [
-        ("thi_breakpoint", "thi_converged", "THI breakpoint", "sankey_longitudinal_thi"),
-        ("temp_breakpoint", "temp_converged", "Barn temp breakpoint", "sankey_longitudinal_temp"),
+        ("thi_breakpoint", "thi_converged", "THI breakpoint",
+         "sankey_longitudinal_thi"),
+        ("temp_breakpoint", "temp_converged", "Barn temp breakpoint",
+         "sankey_longitudinal_temp"),
     ]:
         conv = bs[bs[conv_col] == True].dropna(subset=[bp_col])
         if conv.empty:
             continue
 
-        year_counts = conv.groupby("animal_id")["year"].nunique()
-        n_years_available = conv["year"].nunique()
-        # Only animals present in ALL years (ensures complete flow across
-        # all transitions — animals in 2-3 years create sparse, unreadable flows)
-        repeat_ids = year_counts[year_counts == n_years_available].index
-        if len(repeat_ids) < 3:
-            log.info("  %s: too few animals in all %d years (%d), skipping",
-                     fname, n_years_available, len(repeat_ids))
-            continue
-
-        log.info("  %s: %d animals present in all %d years",
-                 fname, len(repeat_ids), n_years_available)
-
-        repeat = conv[conv["animal_id"].isin(repeat_ids)].copy()
-        repeat = repeat.sort_values(["animal_id", "year"])
-        years = sorted(repeat["year"].unique().astype(int))
-
+        # ── Closed cohort: all years required ───────────────────
+        mean_bp = (conv.groupby(["animal_id", "year"])[bp_col]
+                       .mean().reset_index())
+        years = sorted(mean_bp["year"].unique().astype(int))
         if len(years) < 2:
             continue
 
-        # Build per-animal transition categories
-        transition_labels = [f"{years[i]}→{years[i+1]}" for i in range(len(years)-1)]
-        animal_cats = {}  # {animal_id: [cat_for_transition_0, cat_for_transition_1, ...]}
+        year_counts = mean_bp.groupby("animal_id")["year"].nunique()
+        cohort_ids = year_counts[year_counts == len(years)].index
+        if len(cohort_ids) < 10:
+            log.info("  %s: too few animals in all %d years (%d < 10), "
+                     "skipping", fname, len(years), len(cohort_ids))
+            continue
 
-        for i in range(len(years) - 1):
-            y1, y2 = years[i], years[i + 1]
-            d1 = repeat[repeat["year"] == y1].set_index("animal_id")[bp_col]
-            d2 = repeat[repeat["year"] == y2].set_index("animal_id")[bp_col]
-            shared = d1.index.intersection(d2.index)
-            for aid in shared:
-                if aid not in animal_cats:
-                    animal_cats[aid] = [None] * len(transition_labels)
-                animal_cats[aid][i] = _classify(d2[aid] - d1[aid])
+        cohort = (mean_bp[mean_bp["animal_id"].isin(cohort_ids)]
+                  .pivot(index="animal_id", columns="year",
+                         values=bp_col))
+        n_animals = len(cohort)
+        log.info("  %s: %d animals present in all %d years",
+                 fname, n_animals, len(years))
 
-        # Count per column per category
-        n_transitions = len(transition_labels)
-        col_counts = []  # [{cat: count}, ...]
-        for ti in range(n_transitions):
+        # Column 0 = baseline year (all "stable"), then year-to-year Δ
+        col_labels = [str(years[0])] + [
+            f"{years[i]}\u2192{years[i+1]}" for i in range(len(years) - 1)]
+        n_cols = len(col_labels)
+
+        animal_cats = {}
+        for aid in cohort.index:
+            cats = ["stable"]
+            for i in range(len(years) - 1):
+                cats.append(_classify(
+                    cohort.loc[aid, years[i + 1]]
+                    - cohort.loc[aid, years[i]]))
+            animal_cats[aid] = cats
+
+        # ── Count per column per category ───────────────────────
+        col_counts = []
+        for ci in range(n_cols):
             counts = {cat: 0 for cat in cat_labels}
-            for aid, cats in animal_cats.items():
-                if cats[ti] is not None:
-                    counts[cats[ti]] += 1
+            for cats in animal_cats.values():
+                counts[cats[ci]] += 1
             col_counts.append(counts)
 
-        # Flow counts between consecutive columns
-        flows = []  # [{ (cat_from, cat_to): count }, ...]
-        for ti in range(n_transitions - 1):
+        # ── Flow counts between consecutive columns ─────────────
+        flows = []
+        for ci in range(n_cols - 1):
             flow = {}
-            for aid, cats in animal_cats.items():
-                if cats[ti] is not None and cats[ti + 1] is not None:
-                    key = (cats[ti], cats[ti + 1])
-                    flow[key] = flow.get(key, 0) + 1
+            for cats in animal_cats.values():
+                key = (cats[ci], cats[ci + 1])
+                flow[key] = flow.get(key, 0) + 1
             flows.append(flow)
 
-        # ── Draw ─────────────────────────────────────────────
-        fig_width = 5 + 3.5 * n_transitions
+        # ── Draw ────────────────────────────────────────────────
+        fig_width = 5 + 3.5 * n_cols
         fig, ax = plt.subplots(figsize=(fig_width, 7))
 
         col_width = 0.3
-        gap = 0.02  # gap between stacked rectangles
-        x_positions = list(range(n_transitions))
+        gap = 0.02
+        x_positions = list(range(n_cols))
         total_height = 1.0
 
-        # Pre-compute y positions for each category in each column
-        col_y_positions = []  # [{cat: (y_bot, y_top)}, ...]
-        for ti in range(n_transitions):
-            total_n = sum(col_counts[ti].values())
+        col_y_positions = []
+        for ci in range(n_cols):
+            total_n = sum(col_counts[ci].values())
             if total_n == 0:
                 col_y_positions.append({})
                 continue
@@ -2067,57 +2191,56 @@ def plot_longitudinal_sankey(bs: pd.DataFrame, out_dir: Path) -> None:
             positions = {}
             y_cursor = 0
             for cat in cat_labels:
-                h = usable_height * col_counts[ti][cat] / total_n if total_n > 0 else 0
+                h = (usable_height * col_counts[ci][cat] / total_n
+                     if total_n > 0 else 0)
                 positions[cat] = (y_cursor, y_cursor + h)
                 y_cursor += h + gap
             col_y_positions.append(positions)
 
-        # Draw rectangles and labels
-        for ti in range(n_transitions):
-            x = x_positions[ti]
-            total_n = sum(col_counts[ti].values())
+        # Rectangles + labels
+        for ci in range(n_cols):
+            x = x_positions[ci]
             for cat in cat_labels:
-                count = col_counts[ti][cat]
+                count = col_counts[ci][cat]
                 if count == 0:
                     continue
-                y_bot, y_top = col_y_positions[ti][cat]
+                y_bot, y_top = col_y_positions[ci][cat]
                 rect = mpatches.FancyBboxPatch(
-                    (x - col_width / 2, y_bot), col_width, y_top - y_bot,
-                    boxstyle="round,pad=0.01",
+                    (x - col_width / 2, y_bot), col_width,
+                    y_top - y_bot, boxstyle="round,pad=0.01",
                     facecolor=CAT_COLOURS[cat], edgecolor="#333",
                     linewidth=0.8, alpha=0.85)
                 ax.add_patch(rect)
 
-                # Number label
                 mid_y = (y_bot + y_top) / 2
                 if y_top - y_bot > 0.04:
                     ax.text(x, mid_y, f"{count}",
                             ha="center", va="center", fontsize=10,
                             fontweight="bold", color="white")
 
-            # Column header
-            ax.text(x, -0.08, transition_labels[ti],
-                    ha="center", va="top", fontsize=11, fontweight="bold")
-            ax.text(x, -0.13, f"(n={total_n})",
-                    ha="center", va="top", fontsize=9, color="#666")
+            ax.text(x, -0.08, col_labels[ci],
+                    ha="center", va="top", fontsize=11,
+                    fontweight="bold")
+            if ci == 0:
+                ax.text(x, -0.13, "(baseline)",
+                        ha="center", va="top", fontsize=9,
+                        color="#666")
 
-        # Draw flows between columns
-        for ti in range(n_transitions - 1):
-            flow = flows[ti]
+        # Bezier flow bands
+        for ci in range(n_cols - 1):
+            flow = flows[ci]
             if not flow:
                 continue
 
-            # Track consumed height per category on source and target sides
-            src_cursor = {cat: col_y_positions[ti][cat][0]
-                         for cat in cat_labels if cat in col_y_positions[ti]}
-            tgt_cursor = {cat: col_y_positions[ti + 1][cat][0]
-                         for cat in cat_labels if cat in col_y_positions[ti + 1]}
+            src_cursor = {cat: col_y_positions[ci][cat][0]
+                         for cat in cat_labels
+                         if cat in col_y_positions[ci]}
+            tgt_cursor = {cat: col_y_positions[ci + 1][cat][0]
+                         for cat in cat_labels
+                         if cat in col_y_positions[ci + 1]}
 
-            x0 = x_positions[ti] + col_width / 2
-            x1 = x_positions[ti + 1] - col_width / 2
-
-            total_src = sum(col_counts[ti].values())
-            total_tgt = sum(col_counts[ti + 1].values())
+            x0 = x_positions[ci] + col_width / 2
+            x1 = x_positions[ci + 1] - col_width / 2
 
             for cat_from in cat_labels:
                 for cat_to in cat_labels:
@@ -2125,46 +2248,53 @@ def plot_longitudinal_sankey(bs: pd.DataFrame, out_dir: Path) -> None:
                     if count == 0:
                         continue
 
-                    # Source band extent
-                    src_total = col_y_positions[ti].get(cat_from, (0, 0))
-                    src_h = (src_total[1] - src_total[0]) * count / max(col_counts[ti][cat_from], 1)
+                    src_total = col_y_positions[ci].get(
+                        cat_from, (0, 0))
+                    src_h = ((src_total[1] - src_total[0]) * count
+                             / max(col_counts[ci][cat_from], 1))
                     y0_bot = src_cursor[cat_from]
                     y0_top = y0_bot + src_h
                     src_cursor[cat_from] = y0_top
 
-                    # Target band extent
-                    tgt_total = col_y_positions[ti + 1].get(cat_to, (0, 0))
-                    tgt_h = (tgt_total[1] - tgt_total[0]) * count / max(col_counts[ti + 1][cat_to], 1)
+                    tgt_total = col_y_positions[ci + 1].get(
+                        cat_to, (0, 0))
+                    tgt_h = ((tgt_total[1] - tgt_total[0]) * count
+                             / max(col_counts[ci + 1][cat_to], 1))
                     y1_bot = tgt_cursor[cat_to]
                     y1_top = y1_bot + tgt_h
                     tgt_cursor[cat_to] = y1_top
 
-                    _bezier_band(ax, x0, y0_bot, y0_top, x1, y1_bot, y1_top,
-                                CAT_COLOURS[cat_from])
+                    _bezier_band(ax, x0, y0_bot, y0_top, x1, y1_bot,
+                                 y1_top, CAT_COLOURS[cat_from])
 
-                    # Flow count label (only if large enough to be readable)
                     if count >= 2:
                         mid_x = (x0 + x1) / 2
-                        mid_y = (y0_bot + y0_top + y1_bot + y1_top) / 4
+                        mid_y = ((y0_bot + y0_top + y1_bot + y1_top)
+                                 / 4)
                         ax.text(mid_x, mid_y, str(count),
                                 ha="center", va="center", fontsize=7,
                                 color="#333", alpha=0.7)
 
         # Legend
-        legend_handles = [mpatches.Patch(color=CAT_COLOURS[cat], label=cat)
-                         for cat in cat_labels]
-        ax.legend(handles=legend_handles, loc="upper right", fontsize=8,
-                  title="Δ breakpoint category", title_fontsize=9)
+        legend_handles = [mpatches.Patch(color=CAT_COLOURS[cat],
+                                         label=cat)
+                          for cat in cat_labels]
+        ax.legend(handles=legend_handles, loc="upper right",
+                  fontsize=8, title="\u0394 breakpoint category",
+                  title_fontsize=9)
 
-        ax.set_xlim(-0.6, n_transitions - 0.4)
-        ax.set_ylim(-0.2, total_height + gap * len(cat_labels) + 0.05)
+        ax.set_xlim(-0.6, n_cols - 0.4)
+        ax.set_ylim(-0.2,
+                    total_height + gap * len(cat_labels) + 0.05)
         ax.set_xticks([])
         ax.set_yticks([])
         ax.spines[:].set_visible(False)
-        ax.set_title(f"Breakpoint stability: {bp_label}\n"
-                     f"({len(repeat_ids)} animals, "
-                     f"Δ thresholds: ±1 stable, ±3 moderate, >3 strong)",
-                     fontsize=13, fontweight="bold")
+
+        ax.set_title(
+            f"Breakpoint adaptation: {bp_label}\n"
+            f"({n_animals} animals in all {len(years)} years, "
+            f"\u0394 thresholds: \u00b11 stable, \u00b13 moderate, >3 strong)",
+            fontsize=13, fontweight="bold")
         fig.tight_layout()
         _save(fig, fname, out_dir)
 
@@ -2406,6 +2536,7 @@ def main() -> None:
         ("Climate ETA", lambda: plot_climate_eta(d)),
         ("TNF vs yield", lambda: plot_tnf_yield(d)),
         ("Longitudinal breakpoints", lambda: plot_longitudinal_breakpoints(bs, d)),
+        ("Breakpoint raincloud", lambda: plot_breakpoint_raincloud(d)),
         ("Longitudinal Sankey", lambda: plot_longitudinal_sankey(bs, d)),
         ("Sankey diagrams", lambda: plot_threshold_sankey(bs, d)),
     ]
