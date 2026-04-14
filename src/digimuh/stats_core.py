@@ -18,6 +18,7 @@ import pandas as pd
 from scipy.stats import spearmanr
 
 from digimuh.constants import THI_RANGE, TEMP_RANGE, MIN_READINGS
+from digimuh.fitting import broken_stick_fit, davies_test, pscore_test, hill_fit
 
 log = logging.getLogger("digimuh.stats")
 
