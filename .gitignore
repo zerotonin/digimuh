@@ -13,6 +13,7 @@ build/
 .coverage
 htmlcov/
 _build/
+docs/_build/
 .idea/
 .vscode/
 *.swp
