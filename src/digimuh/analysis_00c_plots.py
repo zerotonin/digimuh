@@ -783,7 +783,13 @@ def plot_thi_vs_temp_scatter(bs: pd.DataFrame, out_dir: Path) -> None:
 
 def plot_circadian_null_model(out_dir: Path) -> None:
     """Plot 24h rumen temperature profile: cool days vs stress days,
-    with breakpoint crossing probability density on secondary y-axis."""
+    with breakpoint crossing density and stress-cool difference curve.
+
+    Two panels:
+    A) Cool-day and stress-day profiles + crossing density KDE
+    B) Difference curve (stress minus cool) = additional rumen temperature
+       attributable to heat stress, with crossing density for reference
+    """
     import matplotlib.pyplot as plt
     from scipy.stats import gaussian_kde
     _setup()
@@ -799,73 +805,125 @@ def plot_circadian_null_model(out_dir: Path) -> None:
 
     log.info("  Plotting circadian null model …")
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(10, 10),
+                                          gridspec_kw={"height_ratios": [1.2, 1]})
 
-    for day_type, colour, label in [
-        ("cool", COLOURS["below_bp"], "Cool days (THI < breakpoint all day)"),
-        ("stress", COLOURS["above_bp"], "Heat stress days (THI exceeded breakpoint)"),
-    ]:
+    # ── Compute hourly profiles ──────────────────────────────
+    hourly_data = {}
+    for day_type in ["cool", "stress"]:
         sub = df[df["day_type"] == day_type]
         if sub.empty:
             continue
-
-        # Grand mean ± SEM across animals at each hour
         hourly = sub.groupby("hour")["body_temp_mean"].agg(["mean", "std", "count"])
         hourly["sem"] = hourly["std"] / np.sqrt(hourly["count"])
+        hourly_data[day_type] = hourly
 
-        ax.fill_between(hourly.index, hourly["mean"] - hourly["sem"],
-                       hourly["mean"] + hourly["sem"],
-                       alpha=0.2, color=colour)
-        ax.plot(hourly.index, hourly["mean"], color=colour, linewidth=2,
-                marker="o", markersize=4, label=label)
-
-    # Mark milking exclusion windows
-    for start, end in [(4, 7), (16, 19)]:
-        ax.axvspan(start, end, alpha=0.08, color="#999", zorder=0)
-        if start == 4:
-            ax.text(5.5, ax.get_ylim()[0] + 0.001, "Milking",
-                    ha="center", fontsize=8, color="#999", fontstyle="italic")
-
-    ax.set_xlabel("Hour of day")
-    ax.set_ylabel("Rumen temperature (°C)")
-    ax.set_xticks(range(0, 24, 2))
-    ax.set_xlim(-0.5, 23.5)
-
-    # ── Secondary y-axis: crossing probability density ────────
+    # Load crossing density
     crossing_path = out_dir / "crossing_times.csv"
+    has_crossings = False
     if crossing_path.exists():
         ct = pd.read_csv(crossing_path)
         ct_thi = ct[ct["predictor"] == "thi"] if "predictor" in ct.columns else ct
         if len(ct_thi) > 20:
-            ax2 = ax.twinx()
-
+            has_crossings = True
             vals = ct_thi["day_fraction"].dropna().values
             kde = gaussian_kde(vals, bw_method=0.3)
             x_kde = np.linspace(0, 24, 200)
             y_kde = kde(x_kde)
 
-            ax2.fill_between(x_kde, 0, y_kde, alpha=0.12,
+    # ── Panel A: Cool vs stress profiles ─────────────────────
+    for day_type, colour, label in [
+        ("cool", COLOURS["below_bp"], "Cool days (THI < breakpoint all day)"),
+        ("stress", COLOURS["above_bp"], "Heat stress days (THI exceeded breakpoint)"),
+    ]:
+        if day_type not in hourly_data:
+            continue
+        hourly = hourly_data[day_type]
+        ax_top.fill_between(hourly.index, hourly["mean"] - hourly["sem"],
+                           hourly["mean"] + hourly["sem"],
+                           alpha=0.2, color=colour)
+        ax_top.plot(hourly.index, hourly["mean"], color=colour, linewidth=2,
+                    marker="o", markersize=4, label=label)
+
+    for start, end in [(4, 7), (16, 19)]:
+        ax_top.axvspan(start, end, alpha=0.08, color="#999", zorder=0)
+
+    ax_top.set_ylabel("Rumen temperature (°C)")
+    ax_top.set_xticks(range(0, 24, 2))
+    ax_top.set_xlim(-0.5, 23.5)
+
+    if has_crossings:
+        ax_top2 = ax_top.twinx()
+        ax_top2.fill_between(x_kde, 0, y_kde, alpha=0.12,
                             color="#009E73", zorder=0)
-            ax2.plot(x_kde, y_kde, color="#009E73", linewidth=1.5,
-                     linestyle="-", alpha=0.7,
-                     label=f"Crossing density (n={len(vals)})")
-            ax2.set_ylabel("Breakpoint crossing density", color="#009E73")
-            ax2.tick_params(axis="y", labelcolor="#009E73")
-            ax2.set_ylim(0, y_kde.max() * 2.5)  # leave room above
+        ax_top2.plot(x_kde, y_kde, color="#009E73", linewidth=1.5,
+                     alpha=0.7, label=f"Crossing density (n={len(vals)})")
+        ax_top2.set_ylabel("Crossing density", color="#009E73")
+        ax_top2.tick_params(axis="y", labelcolor="#009E73")
+        ax_top2.set_ylim(0, y_kde.max() * 2.5)
 
-            # Combine legends
-            lines1, labels1 = ax.get_legend_handles_labels()
-            lines2, labels2 = ax2.get_legend_handles_labels()
-            ax.legend(lines1 + lines2, labels1 + labels2,
+        lines1, labels1 = ax_top.get_legend_handles_labels()
+        lines2, labels2 = ax_top2.get_legend_handles_labels()
+        ax_top.legend(lines1 + lines2, labels1 + labels2,
                       fontsize=9, loc="upper left")
-        else:
-            ax.legend(fontsize=9)
     else:
-        ax.legend(fontsize=9)
+        ax_top.legend(fontsize=9, loc="upper left")
 
-    ax.set_title("Rumen temperature circadian profile\n"
-                 "(cool days = null model, stress days = heat effect, "
-                 "green = crossing density)")
+    ax_top.set_title("(A) Rumen temperature circadian profile")
+
+    # ── Panel B: Difference curve (stress minus cool) ────────
+    if "cool" in hourly_data and "stress" in hourly_data:
+        cool_h = hourly_data["cool"]
+        stress_h = hourly_data["stress"]
+        shared_hours = cool_h.index.intersection(stress_h.index)
+
+        if len(shared_hours) > 5:
+            diff_mean = stress_h.loc[shared_hours, "mean"] - cool_h.loc[shared_hours, "mean"]
+            # Propagate SEM: sqrt(sem_cool² + sem_stress²)
+            diff_sem = np.sqrt(
+                cool_h.loc[shared_hours, "sem"] ** 2 +
+                stress_h.loc[shared_hours, "sem"] ** 2
+            )
+
+            ax_bot.fill_between(shared_hours, diff_mean - diff_sem,
+                               diff_mean + diff_sem,
+                               alpha=0.2, color="#CC79A7")
+            ax_bot.plot(shared_hours, diff_mean, color="#CC79A7", linewidth=2.5,
+                        marker="s", markersize=5,
+                        label="Stress − cool (additional rumen temp)")
+            ax_bot.axhline(0, color="#999", linewidth=0.8, linestyle="--")
+
+            for start, end in [(4, 7), (16, 19)]:
+                ax_bot.axvspan(start, end, alpha=0.08, color="#999", zorder=0)
+
+            if has_crossings:
+                ax_bot2 = ax_bot.twinx()
+                ax_bot2.fill_between(x_kde, 0, y_kde, alpha=0.10,
+                                    color="#009E73", zorder=0)
+                ax_bot2.plot(x_kde, y_kde, color="#009E73", linewidth=1.2,
+                             alpha=0.5, label="Crossing density")
+                ax_bot2.set_ylabel("Crossing density", color="#009E73")
+                ax_bot2.tick_params(axis="y", labelcolor="#009E73")
+                ax_bot2.set_ylim(0, y_kde.max() * 2.5)
+
+                lines1, labels1 = ax_bot.get_legend_handles_labels()
+                lines2, labels2 = ax_bot2.get_legend_handles_labels()
+                ax_bot.legend(lines1 + lines2, labels1 + labels2,
+                              fontsize=9, loc="upper left")
+            else:
+                ax_bot.legend(fontsize=9, loc="upper left")
+    else:
+        ax_bot.text(0.5, 0.5, "Need both cool and stress day data",
+                    transform=ax_bot.transAxes, ha="center")
+
+    ax_bot.set_xlabel("Hour of day")
+    ax_bot.set_ylabel("Additional rumen temperature (°C)")
+    ax_bot.set_xticks(range(0, 24, 2))
+    ax_bot.set_xlim(-0.5, 23.5)
+    ax_bot.set_title("(B) Heat stress effect (stress − cool day profile)")
+
+    fig.suptitle("Rumen temperature circadian null model",
+                 fontsize=14, fontweight="bold")
     fig.tight_layout()
     _save(fig, "circadian_null_model", out_dir)
 
@@ -1872,26 +1930,19 @@ def plot_longitudinal_breakpoints(bs: pd.DataFrame, out_dir: Path) -> None:
 # ─────────────────────────────────────────────────────────────
 
 def plot_longitudinal_sankey(bs: pd.DataFrame, out_dir: Path) -> None:
-    """Sankey diagram showing how individual animal breakpoints change
-    between consecutive years.
+    """Alluvial plot showing how animal breakpoints change across year
+    transitions.
 
-    Animals present in 2+ years are classified by their breakpoint
-    change (year N+1 minus year N) into five categories:
-
-        strongly decreased  (Δ < −3)
-        decreased           (−3 ≤ Δ < −1)
-        stable              (−1 ≤ Δ ≤ +1)
-        increased           (+1 < Δ ≤ +3)
-        strongly increased  (Δ > +3)
-
-    The Sankey shows the flow of animals between these categories
-    across each year transition.
+    Matplotlib-based (SVG output).  Each column is a year transition,
+    stacked rectangles show the five Δ-breakpoint categories.  Bezier
+    bands connect categories between adjacent transitions, tracking
+    individual animals.  Counts annotated on each rectangle and flow.
     """
-    import plotly.graph_objects as go
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+    from matplotlib.path import Path as MplPath
+    _setup()
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    # Category definitions: (label, lower_bound, upper_bound)
     CATS = [
         ("strongly decreased", -np.inf, -3),
         ("decreased",          -3,      -1),
@@ -1906,22 +1957,33 @@ def plot_longitudinal_sankey(bs: pd.DataFrame, out_dir: Path) -> None:
         "increased":          "#E69F00",
         "strongly increased": "#D55E00",
     }
-
-    def _hex_to_rgba(hex_colour: str, alpha: float = 0.4) -> str:
-        """Convert #RRGGBB to rgba(r, g, b, a) for plotly."""
-        h = hex_colour.lstrip("#")
-        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-        return f"rgba({r},{g},{b},{alpha})"
+    cat_labels = [c[0] for c in CATS]
 
     def _classify(delta: float) -> str:
         for label, lo, hi in CATS:
-            if lo < delta <= hi if hi < np.inf else lo < delta:
+            if hi == np.inf and delta > lo:
                 return label
             if lo == -np.inf and delta <= hi:
                 return label
-            if hi == np.inf and delta > lo:
+            if lo < delta <= hi:
                 return label
         return "stable"
+
+    def _bezier_band(ax, x0, y0_bot, y0_top, x1, y1_bot, y1_top, colour, alpha=0.35):
+        """Draw a curved band between two vertical extents."""
+        xm = (x0 + x1) / 2
+        verts = [
+            (x0, y0_bot), (xm, y0_bot), (xm, y1_bot), (x1, y1_bot),
+            (x1, y1_top), (xm, y1_top), (xm, y0_top), (x0, y0_top),
+            (x0, y0_bot),
+        ]
+        codes = [
+            MplPath.MOVETO, MplPath.CURVE4, MplPath.CURVE4, MplPath.CURVE4,
+            MplPath.LINETO, MplPath.CURVE4, MplPath.CURVE4, MplPath.CURVE4,
+            MplPath.CLOSEPOLY,
+        ]
+        ax.add_patch(mpatches.PathPatch(
+            MplPath(verts, codes), facecolor=colour, edgecolor="none", alpha=alpha))
 
     for bp_col, conv_col, bp_label, fname in [
         ("thi_breakpoint", "thi_converged", "THI breakpoint", "sankey_longitudinal_thi"),
@@ -1931,12 +1993,10 @@ def plot_longitudinal_sankey(bs: pd.DataFrame, out_dir: Path) -> None:
         if conv.empty:
             continue
 
-        # Find repeat animals
         year_counts = conv.groupby("animal_id")["year"].nunique()
         repeat_ids = year_counts[year_counts >= 2].index
         if len(repeat_ids) < 5:
-            log.info("  %s: too few repeat animals (%d), skipping Sankey",
-                     fname, len(repeat_ids))
+            log.info("  %s: too few repeat animals (%d), skipping", fname, len(repeat_ids))
             continue
 
         repeat = conv[conv["animal_id"].isin(repeat_ids)].copy()
@@ -1946,157 +2006,160 @@ def plot_longitudinal_sankey(bs: pd.DataFrame, out_dir: Path) -> None:
         if len(years) < 2:
             continue
 
-        # Build transitions: for each consecutive year pair, classify
-        # each animal's breakpoint change
-        transitions = []
+        # Build per-animal transition categories
+        transition_labels = [f"{years[i]}→{years[i+1]}" for i in range(len(years)-1)]
+        animal_cats = {}  # {animal_id: [cat_for_transition_0, cat_for_transition_1, ...]}
+
         for i in range(len(years) - 1):
             y1, y2 = years[i], years[i + 1]
             d1 = repeat[repeat["year"] == y1].set_index("animal_id")[bp_col]
             d2 = repeat[repeat["year"] == y2].set_index("animal_id")[bp_col]
             shared = d1.index.intersection(d2.index)
             for aid in shared:
-                delta = d2[aid] - d1[aid]
-                cat = _classify(delta)
-                transitions.append({
-                    "animal_id": aid,
-                    "y1": y1, "y2": y2,
-                    "transition": f"{y1}→{y2}",
-                    "bp_y1": d1[aid], "bp_y2": d2[aid],
-                    "delta": delta,
-                    "category": cat,
-                })
+                if aid not in animal_cats:
+                    animal_cats[aid] = [None] * len(transition_labels)
+                animal_cats[aid][i] = _classify(d2[aid] - d1[aid])
 
-        if not transitions:
-            continue
+        # Count per column per category
+        n_transitions = len(transition_labels)
+        col_counts = []  # [{cat: count}, ...]
+        for ti in range(n_transitions):
+            counts = {cat: 0 for cat in cat_labels}
+            for aid, cats in animal_cats.items():
+                if cats[ti] is not None:
+                    counts[cats[ti]] += 1
+            col_counts.append(counts)
 
-        tdf = pd.DataFrame(transitions)
+        # Flow counts between consecutive columns
+        flows = []  # [{ (cat_from, cat_to): count }, ...]
+        for ti in range(n_transitions - 1):
+            flow = {}
+            for aid, cats in animal_cats.items():
+                if cats[ti] is not None and cats[ti + 1] is not None:
+                    key = (cats[ti], cats[ti + 1])
+                    flow[key] = flow.get(key, 0) + 1
+            flows.append(flow)
 
-        # Build Sankey: one column of nodes per transition, one row per category
-        cat_labels = [c[0] for c in CATS]
-        transition_labels = sorted(tdf["transition"].unique())
+        # ── Draw ─────────────────────────────────────────────
+        fig_width = 5 + 3.5 * n_transitions
+        fig, ax = plt.subplots(figsize=(fig_width, 7))
 
-        # Nodes: category × transition
-        node_labels = []
-        node_colours = []
-        node_x = []
-        node_y = []
-        node_idx = {}
+        col_width = 0.3
+        gap = 0.02  # gap between stacked rectangles
+        x_positions = list(range(n_transitions))
+        total_height = 1.0
 
-        for ti, tl in enumerate(transition_labels):
-            for ci, cat in enumerate(cat_labels):
-                idx = len(node_labels)
-                node_idx[(tl, cat)] = idx
-                node_labels.append(f"{cat}\n({tl})")
-                node_colours.append(CAT_COLOURS[cat])
-                # Position: x spread by transition, y spread by category
-                node_x.append(0.1 + 0.8 * ti / max(len(transition_labels) - 1, 1))
-                node_y.append(0.1 + 0.8 * ci / max(len(cat_labels) - 1, 1))
-
-        # Links: flow between categories across consecutive transitions
-        # For the first transition, just show the category counts as source
-        # For subsequent transitions, link from previous category to new category
-        link_source = []
-        link_target = []
-        link_value = []
-        link_colour = []
-
-        if len(transition_labels) == 1:
-            # Single transition: just show counts per category
-            # Use a dummy "all animals" source node
-            all_node = len(node_labels)
-            node_labels.append(f"All repeat\nanimals")
-            node_colours.append("#666666")
-            node_x.append(0.01)
-            node_y.append(0.5)
-
-            tl = transition_labels[0]
+        # Pre-compute y positions for each category in each column
+        col_y_positions = []  # [{cat: (y_bot, y_top)}, ...]
+        for ti in range(n_transitions):
+            total_n = sum(col_counts[ti].values())
+            if total_n == 0:
+                col_y_positions.append({})
+                continue
+            usable_height = total_height - gap * (len(cat_labels) - 1)
+            positions = {}
+            y_cursor = 0
             for cat in cat_labels:
-                count = len(tdf[(tdf["transition"] == tl) & (tdf["category"] == cat)])
-                if count > 0:
-                    link_source.append(all_node)
-                    link_target.append(node_idx[(tl, cat)])
-                    link_value.append(count)
-                    link_colour.append(_hex_to_rgba(CAT_COLOURS[cat]))
-        else:
-            # Multiple transitions: track individual animals across transitions
-            for ti in range(len(transition_labels) - 1):
-                tl1 = transition_labels[ti]
-                tl2 = transition_labels[ti + 1]
+                h = usable_height * col_counts[ti][cat] / total_n if total_n > 0 else 0
+                positions[cat] = (y_cursor, y_cursor + h)
+                y_cursor += h + gap
+            col_y_positions.append(positions)
 
-                # Find animals present in both transitions
-                t1 = tdf[tdf["transition"] == tl1].set_index("animal_id")
-                t2 = tdf[tdf["transition"] == tl2].set_index("animal_id")
-                shared = t1.index.intersection(t2.index)
-
-                for aid in shared:
-                    cat1 = t1.loc[aid, "category"]
-                    cat2 = t2.loc[aid, "category"]
-                    # Find or create this flow
-                    src = node_idx[(tl1, cat1)]
-                    tgt = node_idx[(tl2, cat2)]
-
-                    # Check if link already exists
-                    found = False
-                    for li in range(len(link_source)):
-                        if link_source[li] == src and link_target[li] == tgt:
-                            link_value[li] += 1
-                            found = True
-                            break
-                    if not found:
-                        link_source.append(src)
-                        link_target.append(tgt)
-                        link_value.append(1)
-                        link_colour.append(_hex_to_rgba(CAT_COLOURS[cat1]))
-
-            # Also add flows into the first transition column (from a source node)
-            first_tl = transition_labels[0]
-            all_node = len(node_labels)
-            node_labels.append(f"Repeat animals\n(n={len(repeat_ids)})")
-            node_colours.append("#666666")
-            node_x.append(0.01)
-            node_y.append(0.5)
-
+        # Draw rectangles and labels
+        for ti in range(n_transitions):
+            x = x_positions[ti]
+            total_n = sum(col_counts[ti].values())
             for cat in cat_labels:
-                count = len(tdf[(tdf["transition"] == first_tl) & (tdf["category"] == cat)])
-                if count > 0:
-                    link_source.append(all_node)
-                    link_target.append(node_idx[(first_tl, cat)])
-                    link_value.append(count)
-                    link_colour.append(_hex_to_rgba(CAT_COLOURS[cat]))
+                count = col_counts[ti][cat]
+                if count == 0:
+                    continue
+                y_bot, y_top = col_y_positions[ti][cat]
+                rect = mpatches.FancyBboxPatch(
+                    (x - col_width / 2, y_bot), col_width, y_top - y_bot,
+                    boxstyle="round,pad=0.01",
+                    facecolor=CAT_COLOURS[cat], edgecolor="#333",
+                    linewidth=0.8, alpha=0.85)
+                ax.add_patch(rect)
 
-        fig = go.Figure(go.Sankey(
-            arrangement="snap",
-            node=dict(
-                label=node_labels,
-                color=node_colours,
-                pad=15,
-                thickness=20,
-                x=node_x,
-                y=node_y,
-            ),
-            link=dict(
-                source=link_source,
-                target=link_target,
-                value=link_value,
-                color=link_colour,
-            ),
-        ))
+                # Number label
+                mid_y = (y_bot + y_top) / 2
+                if y_top - y_bot > 0.04:
+                    ax.text(x, mid_y, f"{count}",
+                            ha="center", va="center", fontsize=10,
+                            fontweight="bold", color="white")
 
-        n_animals = len(repeat_ids)
-        fig.update_layout(
-            title_text=(f"Breakpoint stability: {bp_label}<br>"
-                        f"<sub>{n_animals} animals across {len(years)} years "
-                        f"(Δ thresholds: ±1 stable, ±3 moderate, >3 strong)</sub>"),
-            font_size=11,
-            width=900,
-            height=500,
-            margin=dict(l=20, r=20, t=80, b=20),
-        )
+            # Column header
+            ax.text(x, -0.08, transition_labels[ti],
+                    ha="center", va="top", fontsize=11, fontweight="bold")
+            ax.text(x, -0.13, f"(n={total_n})",
+                    ha="center", va="top", fontsize=9, color="#666")
 
-        fig.write_html(str(out_dir / f"{fname}.html"),
-                       include_plotlyjs="cdn")
-        log.info("  Saved %s.html (%d animals, %d transitions)",
-                 fname, n_animals, len(tdf))
+        # Draw flows between columns
+        for ti in range(n_transitions - 1):
+            flow = flows[ti]
+            if not flow:
+                continue
+
+            # Track consumed height per category on source and target sides
+            src_cursor = {cat: col_y_positions[ti][cat][0]
+                         for cat in cat_labels if cat in col_y_positions[ti]}
+            tgt_cursor = {cat: col_y_positions[ti + 1][cat][0]
+                         for cat in cat_labels if cat in col_y_positions[ti + 1]}
+
+            x0 = x_positions[ti] + col_width / 2
+            x1 = x_positions[ti + 1] - col_width / 2
+
+            total_src = sum(col_counts[ti].values())
+            total_tgt = sum(col_counts[ti + 1].values())
+
+            for cat_from in cat_labels:
+                for cat_to in cat_labels:
+                    count = flow.get((cat_from, cat_to), 0)
+                    if count == 0:
+                        continue
+
+                    # Source band extent
+                    src_total = col_y_positions[ti].get(cat_from, (0, 0))
+                    src_h = (src_total[1] - src_total[0]) * count / max(col_counts[ti][cat_from], 1)
+                    y0_bot = src_cursor[cat_from]
+                    y0_top = y0_bot + src_h
+                    src_cursor[cat_from] = y0_top
+
+                    # Target band extent
+                    tgt_total = col_y_positions[ti + 1].get(cat_to, (0, 0))
+                    tgt_h = (tgt_total[1] - tgt_total[0]) * count / max(col_counts[ti + 1][cat_to], 1)
+                    y1_bot = tgt_cursor[cat_to]
+                    y1_top = y1_bot + tgt_h
+                    tgt_cursor[cat_to] = y1_top
+
+                    _bezier_band(ax, x0, y0_bot, y0_top, x1, y1_bot, y1_top,
+                                CAT_COLOURS[cat_from])
+
+                    # Flow count label (only if large enough to be readable)
+                    if count >= 2:
+                        mid_x = (x0 + x1) / 2
+                        mid_y = (y0_bot + y0_top + y1_bot + y1_top) / 4
+                        ax.text(mid_x, mid_y, str(count),
+                                ha="center", va="center", fontsize=7,
+                                color="#333", alpha=0.7)
+
+        # Legend
+        legend_handles = [mpatches.Patch(color=CAT_COLOURS[cat], label=cat)
+                         for cat in cat_labels]
+        ax.legend(handles=legend_handles, loc="upper right", fontsize=8,
+                  title="Δ breakpoint category", title_fontsize=9)
+
+        ax.set_xlim(-0.6, n_transitions - 0.4)
+        ax.set_ylim(-0.2, total_height + gap * len(cat_labels) + 0.05)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.spines[:].set_visible(False)
+        ax.set_title(f"Breakpoint stability: {bp_label}\n"
+                     f"({len(repeat_ids)} animals, "
+                     f"Δ thresholds: ±1 stable, ±3 moderate, >3 strong)",
+                     fontsize=13, fontweight="bold")
+        fig.tight_layout()
+        _save(fig, fname, out_dir)
 
 
 # ─────────────────────────────────────────────────────────────
