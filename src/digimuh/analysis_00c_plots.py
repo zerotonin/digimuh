@@ -402,7 +402,7 @@ def plot_spearman(spearman: pd.DataFrame, out_dir: Path) -> None:
         ax.hist(vals, bins=30, color=color, edgecolor="white", alpha=0.8)
         ax.axvline(vals.median(), color=COLOURS["fit_line"], linestyle="--",
                    label=f"Median = {vals.median():.3f}")
-        ax.set_xlabel(f"Spearman rₛ ({label})")
+        ax.set_xlabel(f"Spearman $r_s$ ({label})")
         ax.set_ylabel("Number of animals")
         ax.legend(fontsize=9)
 
