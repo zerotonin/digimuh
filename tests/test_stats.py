@@ -13,15 +13,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from digimuh.analysis_00b_stats import (
+from digimuh.stats_temporal import (
     compute_circadian_null_model,
     compute_climate_eta,
     compute_crossing_times,
-    compute_thermoneutral_fraction,
     compute_thi_daily_profile,
 )
-
-
+from digimuh.stats_production import (
+    compute_thermoneutral_fraction,
+)
 # ─────────────────────────────────────────────────────────────
 #  fixtures
 # ─────────────────────────────────────────────────────────────
