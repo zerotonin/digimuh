@@ -6,8 +6,8 @@
 """Extract rumen temperature, respiration, barn climate, and production
 data from the DigiMuh database into analysis-ready CSVs.
 
-Run this once.  Downstream scripts (``analysis_00b_stats`` and
-``analysis_00c_plots``) read the CSVs and never touch the database.
+Run this once.  Downstream scripts (``stats_runner`` and
+``viz_runner``) read the CSVs and never touch the database.
 
 Outputs (in ``--out`` directory)::
 

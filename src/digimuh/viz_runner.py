@@ -87,7 +87,7 @@ def main() -> None:
     icc = np.nan
     if not pairs.empty:
         # Recompute ICC from pairs (quick)
-        from digimuh.analysis_00b_stats import compute_stability
+        from digimuh.stats_longitudinal import compute_stability
         _, icc = compute_stability(bs)
 
     log.info("Generating figures …")

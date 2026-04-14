@@ -32,7 +32,7 @@ def plot_grouped_boxplots(bs: pd.DataFrame, out_dir: Path) -> None:
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
     from scipy.stats import wilcoxon
-    from digimuh.analysis_00b_stats import benjamini_hochberg, p_to_stars
+    from digimuh.stats_core import benjamini_hochberg, p_to_stars
     setup_figure()
 
     years = sorted(bs["year"].dropna().unique().astype(int))
@@ -472,7 +472,7 @@ def plot_examples(
     the Hill fit with lower bend point, and the Davies p-value.
     """
     import matplotlib.pyplot as plt
-    from digimuh.analysis_00b_stats import broken_stick_fit, hill_fit
+    from digimuh.fitting import broken_stick_fit, hill_fit
     setup_figure()
 
     configs = [

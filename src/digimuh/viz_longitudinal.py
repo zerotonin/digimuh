@@ -95,7 +95,7 @@ def plot_longitudinal_breakpoints(bs: pd.DataFrame, out_dir: Path) -> None:
         # Significance brackets: consecutive years (Fisher resampling, BH-FDR)
         try:
             from rerandomstats import FisherResamplingTest
-            from digimuh.analysis_00b_stats import benjamini_hochberg, p_to_stars
+            from digimuh.stats_core import benjamini_hochberg, p_to_stars
             raw_ps_abs = []
             year_pairs_abs = []
             for j in range(len(years) - 1):
@@ -144,7 +144,7 @@ def plot_longitudinal_breakpoints(bs: pd.DataFrame, out_dir: Path) -> None:
         # Significance: test if each year's change differs from 0
         try:
             from rerandomstats import FisherResamplingTest
-            from digimuh.analysis_00b_stats import p_to_stars
+            from digimuh.stats_core import p_to_stars
             anno_lines = []
             for y in years[1:]:  # first year is always 0
                 changes = repeat[repeat["year"] == y]["bp_change"].dropna()
