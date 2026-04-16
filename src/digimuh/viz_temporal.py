@@ -25,14 +25,98 @@ log = logging.getLogger("digimuh.viz")
 #  « rumen circadian null model »
 # ─────────────────────────────────────────────────────────────
 
-def plot_circadian_null_model(out_dir: Path) -> None:
-    """Plot 24h rumen temperature profile: cool days vs stress days,
-    with breakpoint crossing density and stress-cool difference curve.
+_MILKING_WINDOWS = [(4, 7), (16, 19)]
+_KDE_COLOUR = "#009E73"
 
-    Two panels:
-    A) Cool-day and stress-day profiles + crossing density KDE
-    B) Difference curve (stress minus cool) = additional rumen temperature
-       attributable to heat stress, with crossing density for reference
+
+def _hourly_by_day_type(df: pd.DataFrame, var: str) -> dict[str, pd.DataFrame]:
+    """Aggregate a variable by clock hour within each day_type.
+
+    Returns a dict keyed by ``"cool"`` / ``"stress"`` with columns
+    ``mean``, ``std``, ``count``, ``sem`` indexed by hour.
+    """
+    out: dict[str, pd.DataFrame] = {}
+    if var not in df.columns:
+        return out
+    for day_type in ("cool", "stress"):
+        sub = df[df["day_type"] == day_type]
+        if sub.empty:
+            continue
+        h = sub.groupby("hour")[var].agg(["mean", "std", "count"])
+        h["sem"] = h["std"] / np.sqrt(h["count"])
+        out[day_type] = h
+    return out
+
+
+def _draw_cool_stress_panel(ax, hourly: dict[str, pd.DataFrame]) -> None:
+    """Draw cool-day (blue) and stress-day (vermillion) mean ± SEM ribbons."""
+    for day_type, colour, label in [
+        ("cool",   COLOURS["below_bp"], "Cool days (THI < bp all day)"),
+        ("stress", COLOURS["above_bp"], "Heat stress days (THI exceeded bp)"),
+    ]:
+        h = hourly.get(day_type)
+        if h is None:
+            continue
+        ax.fill_between(h.index, h["mean"] - h["sem"], h["mean"] + h["sem"],
+                        alpha=0.2, color=colour)
+        ax.plot(h.index, h["mean"], color=colour, linewidth=2,
+                marker="o", markersize=4, label=label)
+    for s, e in _MILKING_WINDOWS:
+        ax.axvspan(s, e, alpha=0.08, color="#999", zorder=0)
+
+
+def _overlay_crossing_density(ax, kde: tuple | None, legend_label: str):
+    """Add crossing-density KDE ribbon on a twinx; returns the twin axis."""
+    if kde is None:
+        return None
+    x_k, y_k, n_k = kde
+    ax2 = ax.twinx()
+    ax2.fill_between(x_k, 0, y_k, alpha=0.12, color=_KDE_COLOUR, zorder=0)
+    ax2.plot(x_k, y_k, color=_KDE_COLOUR, linewidth=1.5, alpha=0.7,
+             label=f"{legend_label} (n={n_k})")
+    ax2.set_ylabel("Crossing density", color=_KDE_COLOUR)
+    ax2.tick_params(axis="y", labelcolor=_KDE_COLOUR)
+    ax2.set_ylim(0, y_k.max() * 2.5)
+    ax2.grid(False)
+    return ax2
+
+
+def _merge_legends(primary, secondary, **kw):
+    lines1, labels1 = primary.get_legend_handles_labels()
+    if secondary is not None:
+        lines2, labels2 = secondary.get_legend_handles_labels()
+        primary.legend(lines1 + lines2, labels1 + labels2, **kw)
+    else:
+        primary.legend(**kw)
+
+
+def plot_circadian_null_model(out_dir: Path) -> None:
+    """Plot the rumen-temperature circadian null model (2×2 grid).
+
+    Four panels, all plotted over clock hour on cool vs stress days
+    (stratified by each animal's own THI breakpoint):
+
+    * **A** — Rumen temperature, with THI-crossing density overlay.
+    * **B** — Stress − cool Δ rumen temperature (heat-stress dose),
+      with THI-crossing density overlay.
+    * **C** — Barn THI on cool vs stress days + THI-crossing density.
+    * **D** — Barn temperature on cool vs stress days +
+      barn-temp-crossing density.
+
+    Shaded regions:
+
+    * Coloured ribbon around each mean line = ±1 SEM across animals
+      (cool=blue, stress=vermillion, Δ=pink).
+    * Grey vertical bands at 04:00–07:00 and 16:00–19:00 = excluded
+      milking windows.
+    * Green ribbon on the right y-axis = kernel density estimate of
+      breakpoint-crossing clock times (smoothed histogram of when,
+      during the 24 h cycle, each cow's individual breakpoint is
+      crossed upward).
+
+    Grid lines are disabled to keep the overlays readable.  A
+    companion figure ``circadian_null_model_stacked`` is written with
+    the same variables on rows sharing a single hour-of-day x-axis.
     """
     import matplotlib.pyplot as plt
     from scipy.stats import gaussian_kde
@@ -47,129 +131,157 @@ def plot_circadian_null_model(out_dir: Path) -> None:
     if df.empty:
         return
 
-    log.info("  Plotting circadian null model …")
+    log.info("  Plotting circadian null model (2×2) …")
 
-    fig, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(10, 10),
-                                          gridspec_kw={"height_ratios": [1.2, 1]})
+    hourly = {
+        "body_temp": _hourly_by_day_type(df, "body_temp_mean"),
+        "thi":       _hourly_by_day_type(df, "thi_mean"),
+        "barn_temp": _hourly_by_day_type(df, "barn_temp_mean"),
+    }
 
-    # ── Compute hourly profiles ──────────────────────────────
-    hourly_data = {}
-    for day_type in ["cool", "stress"]:
-        sub = df[df["day_type"] == day_type]
-        if sub.empty:
-            continue
-        hourly = sub.groupby("hour")["body_temp_mean"].agg(["mean", "std", "count"])
-        hourly["sem"] = hourly["std"] / np.sqrt(hourly["count"])
-        hourly_data[day_type] = hourly
-
-    # Load crossing density
+    # ── Crossing density KDE per predictor ─────────────────
+    kdes: dict[str, tuple] = {}
     crossing_path = out_dir / "crossing_times.csv"
-    has_crossings = False
     if crossing_path.exists():
         ct = pd.read_csv(crossing_path)
-        ct_thi = ct[ct["predictor"] == "thi"] if "predictor" in ct.columns else ct
-        if len(ct_thi) > 20:
-            has_crossings = True
-            vals = ct_thi["day_fraction"].dropna().values
-            kde = gaussian_kde(vals, bw_method=0.3)
-            x_kde = np.linspace(0, 24, 200)
-            y_kde = kde(x_kde)
+        for pred in ("thi", "temp"):
+            cpred = ct[ct["predictor"] == pred] if "predictor" in ct.columns else ct
+            vals = cpred["day_fraction"].dropna().values
+            if len(vals) > 20:
+                kde = gaussian_kde(vals, bw_method=0.3)
+                x_k = np.linspace(0, 24, 200)
+                kdes[pred] = (x_k, kde(x_k), len(vals))
 
-    # ── Panel A: Cool vs stress profiles ─────────────────────
-    for day_type, colour, label in [
-        ("cool", COLOURS["below_bp"], "Cool days (THI < breakpoint all day)"),
-        ("stress", COLOURS["above_bp"], "Heat stress days (THI exceeded breakpoint)"),
-    ]:
-        if day_type not in hourly_data:
-            continue
-        hourly = hourly_data[day_type]
-        ax_top.fill_between(hourly.index, hourly["mean"] - hourly["sem"],
-                           hourly["mean"] + hourly["sem"],
-                           alpha=0.2, color=colour)
-        ax_top.plot(hourly.index, hourly["mean"], color=colour, linewidth=2,
-                    marker="o", markersize=4, label=label)
+    # ── 2×2 figure ─────────────────────────────────────────
+    fig, ((ax_a, ax_c), (ax_b, ax_d)) = plt.subplots(
+        2, 2, figsize=(16, 10))
 
-    for start, end in [(4, 7), (16, 19)]:
-        ax_top.axvspan(start, end, alpha=0.08, color="#999", zorder=0)
+    # (A) Rumen temperature
+    _draw_cool_stress_panel(ax_a, hourly["body_temp"])
+    ax_a2 = _overlay_crossing_density(ax_a, kdes.get("thi"),
+                                      "THI crossing density")
+    ax_a.set_ylabel("Rumen temperature (°C)")
+    ax_a.set_title("(A) Rumen temperature circadian profile")
+    _merge_legends(ax_a, ax_a2, fontsize=8, loc="upper left")
 
-    ax_top.set_ylabel("Rumen temperature (°C)")
-    ax_top.set_xticks(range(0, 24, 2))
-    ax_top.set_xlim(-0.5, 23.5)
+    # (B) Stress − cool Δ rumen
+    cool_h = hourly["body_temp"].get("cool")
+    stress_h = hourly["body_temp"].get("stress")
+    if cool_h is not None and stress_h is not None:
+        shared = cool_h.index.intersection(stress_h.index)
+        if len(shared) > 5:
+            diff = stress_h.loc[shared, "mean"] - cool_h.loc[shared, "mean"]
+            dsem = np.sqrt(cool_h.loc[shared, "sem"] ** 2
+                           + stress_h.loc[shared, "sem"] ** 2)
+            ax_b.fill_between(shared, diff - dsem, diff + dsem,
+                              alpha=0.2, color="#CC79A7")
+            ax_b.plot(shared, diff, color="#CC79A7", linewidth=2.5,
+                      marker="s", markersize=5,
+                      label="Stress − cool (Δ rumen temp)")
+            ax_b.axhline(0, color="#999", linewidth=0.8, linestyle="--")
+            for s, e in _MILKING_WINDOWS:
+                ax_b.axvspan(s, e, alpha=0.08, color="#999", zorder=0)
+    ax_b2 = _overlay_crossing_density(ax_b, kdes.get("thi"),
+                                      "THI crossing density")
+    ax_b.set_ylabel("Δ rumen temperature (°C)")
+    ax_b.set_title("(B) Heat stress effect (stress − cool)")
+    _merge_legends(ax_b, ax_b2, fontsize=8, loc="upper left")
 
-    if has_crossings:
-        ax_top2 = ax_top.twinx()
-        ax_top2.fill_between(x_kde, 0, y_kde, alpha=0.12,
-                            color="#009E73", zorder=0)
-        ax_top2.plot(x_kde, y_kde, color="#009E73", linewidth=1.5,
-                     alpha=0.7, label=f"Crossing density (n={len(vals)})")
-        ax_top2.set_ylabel("Crossing density", color="#009E73")
-        ax_top2.tick_params(axis="y", labelcolor="#009E73")
-        ax_top2.set_ylim(0, y_kde.max() * 2.5)
+    # (C) Barn THI
+    _draw_cool_stress_panel(ax_c, hourly["thi"])
+    ax_c2 = _overlay_crossing_density(ax_c, kdes.get("thi"),
+                                      "THI crossing density")
+    ax_c.set_ylabel("Barn THI")
+    ax_c.set_title("(C) Barn THI circadian profile")
+    _merge_legends(ax_c, ax_c2, fontsize=8, loc="upper left")
 
-        lines1, labels1 = ax_top.get_legend_handles_labels()
-        lines2, labels2 = ax_top2.get_legend_handles_labels()
-        ax_top.legend(lines1 + lines2, labels1 + labels2,
-                      fontsize=9, loc="upper left")
+    # (D) Barn temperature
+    if hourly["barn_temp"]:
+        _draw_cool_stress_panel(ax_d, hourly["barn_temp"])
+        ax_d2 = _overlay_crossing_density(ax_d, kdes.get("temp"),
+                                          "Barn-temp crossing density")
+        ax_d.set_ylabel("Barn temperature (°C)")
+        ax_d.set_title("(D) Barn temperature circadian profile")
+        _merge_legends(ax_d, ax_d2, fontsize=8, loc="upper left")
     else:
-        ax_top.legend(fontsize=9, loc="upper left")
+        ax_d.text(0.5, 0.5,
+                  "barn_temp_mean absent from CSV —\n"
+                  "re-run digimuh-stats to populate",
+                  transform=ax_d.transAxes, ha="center", va="center",
+                  fontsize=10, color="#666")
+        ax_d.set_axis_off()
 
-    ax_top.set_title("(A) Rumen temperature circadian profile")
+    for ax in (ax_a, ax_b, ax_c, ax_d):
+        ax.set_xlabel("Hour of day")
+        ax.set_xticks(range(0, 24, 2))
+        ax.set_xlim(-0.5, 23.5)
+        ax.grid(False)
 
-    # ── Panel B: Difference curve (stress minus cool) ────────
-    if "cool" in hourly_data and "stress" in hourly_data:
-        cool_h = hourly_data["cool"]
-        stress_h = hourly_data["stress"]
-        shared_hours = cool_h.index.intersection(stress_h.index)
-
-        if len(shared_hours) > 5:
-            diff_mean = stress_h.loc[shared_hours, "mean"] - cool_h.loc[shared_hours, "mean"]
-            # Propagate SEM: sqrt(sem_cool² + sem_stress²)
-            diff_sem = np.sqrt(
-                cool_h.loc[shared_hours, "sem"] ** 2 +
-                stress_h.loc[shared_hours, "sem"] ** 2
-            )
-
-            ax_bot.fill_between(shared_hours, diff_mean - diff_sem,
-                               diff_mean + diff_sem,
-                               alpha=0.2, color="#CC79A7")
-            ax_bot.plot(shared_hours, diff_mean, color="#CC79A7", linewidth=2.5,
-                        marker="s", markersize=5,
-                        label="Stress − cool (additional rumen temp)")
-            ax_bot.axhline(0, color="#999", linewidth=0.8, linestyle="--")
-
-            for start, end in [(4, 7), (16, 19)]:
-                ax_bot.axvspan(start, end, alpha=0.08, color="#999", zorder=0)
-
-            if has_crossings:
-                ax_bot2 = ax_bot.twinx()
-                ax_bot2.fill_between(x_kde, 0, y_kde, alpha=0.10,
-                                    color="#009E73", zorder=0)
-                ax_bot2.plot(x_kde, y_kde, color="#009E73", linewidth=1.2,
-                             alpha=0.5, label="Crossing density")
-                ax_bot2.set_ylabel("Crossing density", color="#009E73")
-                ax_bot2.tick_params(axis="y", labelcolor="#009E73")
-                ax_bot2.set_ylim(0, y_kde.max() * 2.5)
-
-                lines1, labels1 = ax_bot.get_legend_handles_labels()
-                lines2, labels2 = ax_bot2.get_legend_handles_labels()
-                ax_bot.legend(lines1 + lines2, labels1 + labels2,
-                              fontsize=9, loc="upper left")
-            else:
-                ax_bot.legend(fontsize=9, loc="upper left")
-    else:
-        ax_bot.text(0.5, 0.5, "Need both cool and stress day data",
-                    transform=ax_bot.transAxes, ha="center")
-
-    ax_bot.set_xlabel("Hour of day")
-    ax_bot.set_ylabel("Additional rumen temperature (°C)")
-    ax_bot.set_xticks(range(0, 24, 2))
-    ax_bot.set_xlim(-0.5, 23.5)
-    ax_bot.set_title("(B) Heat stress effect (stress − cool day profile)")
-
-    fig.suptitle("Rumen temperature circadian null model",
+    fig.suptitle("Circadian null model — cool vs heat-stress days",
                  fontsize=14, fontweight="bold")
     fig.tight_layout()
     save_figure(fig, "circadian_null_model", out_dir)
+
+    # ── Companion stacked figure: single shared x-axis ─────
+    _plot_circadian_stacked(out_dir, hourly, kdes)
+
+
+def _plot_circadian_stacked(
+    out_dir: Path,
+    hourly: dict[str, dict[str, pd.DataFrame]],
+    kdes: dict[str, tuple],
+) -> None:
+    """Stacked companion plot: one shared hour-of-day x-axis, each
+    variable on its own row, crossing densities in the bottom row."""
+    import matplotlib.pyplot as plt
+
+    rows: list[tuple[str, str]] = []
+    if hourly["body_temp"]:
+        rows.append(("body_temp", "Rumen temp (°C)"))
+    if hourly["thi"]:
+        rows.append(("thi", "Barn THI"))
+    if hourly["barn_temp"]:
+        rows.append(("barn_temp", "Barn temp (°C)"))
+    if not rows:
+        return
+
+    include_kde_row = bool(kdes)
+    n_rows = len(rows) + (1 if include_kde_row else 0)
+
+    fig, axes = plt.subplots(n_rows, 1,
+                             figsize=(10, 2.2 * n_rows),
+                             sharex=True)
+    if n_rows == 1:
+        axes = [axes]
+
+    for ax, (var_key, ylabel) in zip(axes, rows):
+        _draw_cool_stress_panel(ax, hourly[var_key])
+        ax.set_ylabel(ylabel)
+        ax.grid(False)
+        ax.legend(fontsize=7, loc="upper left")
+
+    if include_kde_row:
+        ax_k = axes[-1]
+        for pred, colour in [("thi", _KDE_COLOUR), ("temp", "#E69F00")]:
+            if pred not in kdes:
+                continue
+            x_k, y_k, n_k = kdes[pred]
+            ax_k.fill_between(x_k, 0, y_k, alpha=0.22, color=colour)
+            ax_k.plot(x_k, y_k, color=colour, linewidth=1.5,
+                      label=f"{pred.upper()} crossings (n={n_k})")
+        for s, e in _MILKING_WINDOWS:
+            ax_k.axvspan(s, e, alpha=0.08, color="#999", zorder=0)
+        ax_k.set_ylabel("Crossing density")
+        ax_k.grid(False)
+        ax_k.legend(fontsize=7, loc="upper left")
+
+    axes[-1].set_xlabel("Hour of day")
+    axes[-1].set_xticks(range(0, 24, 2))
+    axes[-1].set_xlim(-0.5, 23.5)
+    fig.suptitle("Circadian null model — stacked view",
+                 fontsize=13, fontweight="bold")
+    fig.tight_layout()
+    save_figure(fig, "circadian_null_model_stacked", out_dir)
 
 
 # ─────────────────────────────────────────────────────────────

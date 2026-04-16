@@ -199,6 +199,7 @@ def compute_circadian_null_model(
                     "body_temp_mean": hdata["body_temp"].mean(),
                     "body_temp_std": hdata["body_temp"].std(),
                     "thi_mean": hdata["barn_thi"].mean(),
+                    "barn_temp_mean": hdata["barn_temp"].mean(),
                     "n_readings": len(hdata),
                     "n_days": hdata["date"].nunique(),
                 })
