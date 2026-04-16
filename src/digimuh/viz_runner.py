@@ -60,6 +60,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Generate broken-stick analysis figures")
     parser.add_argument("--data", type=Path, required=True,
                         help="Directory with CSVs from extract + stats steps")
+    parser.add_argument("--frontiers", action="store_true",
+                        help="Frontiers paper mode: render top-N BS-only "
+                             "publication-candidate example fits "
+                             "(rumen vs THI and barn temp); Hill fit hidden.")
+    parser.add_argument("--n-examples", type=int, default=10,
+                        help="Number of example fits per predictor in "
+                             "--frontiers mode (default: 10)")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -92,6 +99,23 @@ def main() -> None:
 
     log.info("Generating figures …")
 
+    if args.frontiers:
+        examples_call = (
+            f"Top-{args.n_examples} rumen BS examples (no Hill)",
+            lambda: plot_examples(
+                rumen, resp, bs, d,
+                select_top=args.n_examples,
+                show_hill=False,
+                show_davies=False,
+                predictors=("thi", "temp"),
+            ),
+        )
+    else:
+        examples_call = (
+            "Diagnostic examples",
+            lambda: plot_examples(rumen, resp, bs, d),
+        )
+
     _plot_calls = [
         ("Grouped boxplots", lambda: plot_grouped_boxplots(bs, d)),
         ("Paired below/above", lambda: plot_paired_below_above(beh, tests, d)),
@@ -102,7 +126,7 @@ def main() -> None:
         ("Stability scatter", lambda: plot_stability(pairs, icc, d)),
         ("THI vs temp scatter", lambda: plot_thi_vs_temp_scatter(bs, d)),
         ("Body temp vs resp scatter", lambda: plot_bodytemp_vs_resp_scatter(bs, d)),
-        ("Diagnostic examples", lambda: plot_examples(rumen, resp, bs, d)),
+        examples_call,
         ("Cross-correlation", lambda: plot_cross_correlation(d)),
         ("Circadian null model", lambda: plot_circadian_null_model(d)),
         ("THI daily profile", lambda: plot_thi_daily_profile(d)),
@@ -126,10 +150,6 @@ def main() -> None:
             log.warning("  %s FAILED: %s", name, e)
 
     log.info("All figures saved to %s", d)
-
-
-if __name__ == "__main__":
-    main()
 
 
 if __name__ == "__main__":
