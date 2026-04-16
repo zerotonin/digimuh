@@ -458,21 +458,43 @@ def plot_stability(pairs: pd.DataFrame, icc: float, out_dir: Path) -> None:
 def plot_examples(
     rumen: pd.DataFrame, resp: pd.DataFrame, bs: pd.DataFrame,
     out_dir: Path,
+    *,
+    select_top: int | None = None,
+    show_hill: bool = True,
+    show_davies: bool = True,
+    predictors: tuple[str, ...] | None = None,
 ) -> None:
-    """Diagnostic example panels for each signal/predictor combination.
+    """Example broken-stick panels per signal/predictor combination.
 
-    For each of the four models (body temp vs THI, body temp vs barn temp,
-    resp vs THI, resp vs barn temp), plots three scenarios:
+    Two selection modes:
 
-    A) BS converged + Hill converged (both methods agree)
-    B) BS failed + Hill converged (Hill rescues the threshold)
-    C) Davies n.s. (no threshold exists, models should not be trusted)
+    * **Scenario mode** (``select_top=None``, default): 3 diagnostic
+      panels per predictor illustrating (A) BS+Hill converged,
+      (B) BS failed / Hill rescues, (C) Davies n.s. — requires
+      Davies/Hill columns.
+    * **Top-N mode** (``select_top=N``): renders the N BS-converged
+      animal-years with highest R² per predictor in a grid.  Useful
+      for picking publication example fits.
 
-    Each panel shows the raw data, the broken-stick fit (if converged),
-    the Hill fit with lower bend point, and the Davies p-value.
+    Args:
+        rumen: Rumen + barn climate data from extract stage.
+        resp: Respiration + barn climate data (pass an empty DataFrame
+            to skip respiration predictors, e.g. in ``--no-resp`` mode).
+        bs: Broken-stick results DataFrame.
+        out_dir: Output directory for figures.
+        select_top: If given, switch to top-N mode and render N panels
+            of highest-R² BS-converged animal-years per predictor.
+        show_hill: If False, skip Hill fit overlay and onset line.
+            Set False for Frontiers figures (BS-only).
+        show_davies: If False, skip Davies/Pscore annotation.
+        predictors: Optional subset of prefixes to include
+            (``"thi"``, ``"temp"``, ``"resp_thi"``, ``"resp_temp"``).
+            Defaults to all four.
     """
     import matplotlib.pyplot as plt
-    from digimuh.fitting import broken_stick_fit, hill_fit
+    from digimuh.fitting import broken_stick_fit
+    if show_hill:
+        from digimuh.fitting import hill_fit
     setup_figure()
 
     configs = [
@@ -485,91 +507,120 @@ def plot_examples(
         ("resp", resp, "resp_rate", "Respiration rate (bpm)",
          "resp_temp", "resp_temp", "barn_temp", "Barn temperature (°C)", (5, 35)),
     ]
+    if predictors is not None:
+        configs = [c for c in configs if c[5] in predictors]
 
-    for signal, data, response_col, ylabel, prefix, bs_prefix, env_col, env_label, x_range in configs:
-        if data.empty:
+    for (signal, data, response_col, ylabel,
+         prefix, bs_prefix, env_col, env_label, x_range) in configs:
+        if data is None or data.empty:
             continue
 
-        conv_col = f"{bs_prefix}_converged"
-        davies_col = f"{bs_prefix}_davies_p"
+        conv_col      = f"{bs_prefix}_converged"
+        davies_col    = f"{bs_prefix}_davies_p"
         hill_conv_col = f"{bs_prefix}_hill_converged"
         hill_bend_col = f"{bs_prefix}_hill_bend"
-        r2_col = f"{bs_prefix}_r_squared"
+        r2_col        = f"{bs_prefix}_r_squared"
 
-        if conv_col not in bs.columns or davies_col not in bs.columns:
+        if conv_col not in bs.columns:
             continue
 
-        # ── Select exemplar animals for three scenarios ──────
+        # ── Select exemplars ────────────────────────────────
+        selected: list[tuple[str, pd.Series, str]] = []
+        if select_top is None:
+            if davies_col not in bs.columns:
+                continue
 
-        # Scenario A: BS converged + Hill converged (best R2)
-        mask_a = (bs[conv_col] == True)
-        if hill_conv_col in bs.columns:
-            mask_a = mask_a & (bs[hill_conv_col] == True)
-        candidates_a = bs[mask_a]
-        animal_a = None
-        if not candidates_a.empty and r2_col in candidates_a.columns:
-            valid_a = candidates_a[candidates_a[r2_col].notna()]
-            if not valid_a.empty:
-                animal_a = valid_a.loc[valid_a[r2_col].idxmax()]
+            # A: BS converged + (Hill converged if column present), best R²
+            mask_a = (bs[conv_col] == True)
+            if hill_conv_col in bs.columns:
+                mask_a = mask_a & (bs[hill_conv_col] == True)
+            candidates_a = bs[mask_a]
+            animal_a = None
+            if not candidates_a.empty and r2_col in candidates_a.columns:
+                valid_a = candidates_a[candidates_a[r2_col].notna()]
+                if not valid_a.empty:
+                    animal_a = valid_a.loc[valid_a[r2_col].idxmax()]
 
-        # Scenario B: BS failed + Hill converged (Hill rescues)
-        mask_b = (bs[conv_col] != True) & (bs[davies_col].fillna(1) < 0.05)
-        if hill_conv_col in bs.columns:
-            mask_b = mask_b & (bs[hill_conv_col] == True) & bs[hill_bend_col].notna()
-        candidates_b = bs[mask_b]
-        animal_b = None
-        if not candidates_b.empty:
-            hill_r2_col = f"{bs_prefix}_hill_r2"
-            if hill_r2_col in candidates_b.columns:
-                valid_b = candidates_b[candidates_b[hill_r2_col].notna()]
-                if not valid_b.empty:
-                    animal_b = valid_b.loc[valid_b[hill_r2_col].idxmax()]
+            # B: BS failed + Hill rescues (needs Hill columns)
+            animal_b = None
+            if hill_conv_col in bs.columns and hill_bend_col in bs.columns:
+                mask_b = ((bs[conv_col] != True)
+                          & (bs[davies_col].fillna(1) < 0.05)
+                          & (bs[hill_conv_col] == True)
+                          & bs[hill_bend_col].notna())
+                candidates_b = bs[mask_b]
+                if not candidates_b.empty:
+                    hill_r2_col = f"{bs_prefix}_hill_r2"
+                    if hill_r2_col in candidates_b.columns:
+                        valid_b = candidates_b[candidates_b[hill_r2_col].notna()]
+                        if not valid_b.empty:
+                            animal_b = valid_b.loc[valid_b[hill_r2_col].idxmax()]
 
-        # Scenario C: Davies n.s. (no threshold)
-        mask_c = bs[davies_col].fillna(1) >= 0.05
-        candidates_c = bs[mask_c]
-        animal_c = None
-        if not candidates_c.empty:
-            # Pick one with most data
-            n_col = "n_readings" if "resp" not in prefix else "n_resp_readings"
-            if n_col in candidates_c.columns:
-                valid_c = candidates_c[candidates_c[n_col] > 50]
-                if not valid_c.empty:
-                    animal_c = valid_c.loc[valid_c[n_col].idxmax()]
+            # C: Davies n.s., most data
+            mask_c = bs[davies_col].fillna(1) >= 0.05
+            candidates_c = bs[mask_c]
+            animal_c = None
+            if not candidates_c.empty:
+                n_col = "n_readings" if "resp" not in prefix else "n_resp_readings"
+                if n_col in candidates_c.columns:
+                    valid_c = candidates_c[candidates_c[n_col] > 50]
+                    if not valid_c.empty:
+                        animal_c = valid_c.loc[valid_c[n_col].idxmax()]
 
-        scenarios = [
-            ("A", animal_a, "BS + Hill converged"),
-            ("B", animal_b, "BS failed, Hill rescues"),
-            ("C", animal_c, "Davies n.s. (no threshold)"),
-        ]
-        valid_scenarios = [(s, a, t) for s, a, t in scenarios if a is not None]
+            for label, animal, subtitle in [
+                ("A", animal_a, "BS + Hill converged"),
+                ("B", animal_b, "BS failed, Hill rescues"),
+                ("C", animal_c, "Davies n.s. (no threshold)"),
+            ]:
+                if animal is not None:
+                    selected.append((label, animal, subtitle))
+            figname = f"diagnostic_{prefix}"
+        else:
+            # Top-N by R² among BS-converged animal-years
+            mask = bs[conv_col] == True
+            if r2_col in bs.columns:
+                mask = mask & bs[r2_col].notna()
+            cand = bs[mask].copy()
+            if cand.empty:
+                continue
+            if r2_col in cand.columns:
+                cand = cand.sort_values(r2_col, ascending=False)
+            cand = cand.head(select_top)
+            for i, (_, row) in enumerate(cand.iterrows(), start=1):
+                r2_val = row.get(r2_col) if r2_col in cand.columns else np.nan
+                subtitle = f"R²={r2_val:.3f}" if pd.notna(r2_val) else ""
+                selected.append((f"#{i}", row, subtitle))
+            figname = f"diagnostic_{prefix}_top{select_top}"
 
-        if not valid_scenarios:
+        if not selected:
             continue
 
-        fig, axes = plt.subplots(1, len(valid_scenarios),
-                                 figsize=(7 * len(valid_scenarios), 6))
-        if len(valid_scenarios) == 1:
-            axes = [axes]
+        # ── Figure layout (grid scales with n) ──────────────
+        n = len(selected)
+        ncols = min(5, n) if n > 3 else n
+        nrows = int(np.ceil(n / ncols))
+        fig, axes = plt.subplots(nrows, ncols,
+                                 figsize=(5.0 * ncols, 4.2 * nrows),
+                                 squeeze=False)
+        axes_flat = axes.flatten()
 
-        for ax, (scenario, animal_row, scenario_title) in zip(axes, valid_scenarios):
+        for ax, (label, animal_row, subtitle) in zip(axes_flat, selected):
             aid = int(animal_row["animal_id"])
             year = int(animal_row["year"])
 
             grp = data[(data["animal_id"] == aid) & (data["year"] == year)]
             if len(grp) < 30:
-                ax.text(0.5, 0.5, "Insufficient data", transform=ax.transAxes, ha="center")
+                ax.text(0.5, 0.5, "Insufficient data",
+                        transform=ax.transAxes, ha="center")
+                ax.set_axis_off()
                 continue
 
             x_vals = grp[env_col].values
             y_vals = grp[response_col].values
 
-            # Scatter
             ax.scatter(x_vals, y_vals, s=2, alpha=0.12, c=COLOURS["identity"])
-
             xr = np.linspace(np.min(x_vals), np.max(x_vals), 300)
 
-            # Broken-stick fit
             bs_fit = broken_stick_fit(x_vals, y_vals, x_range=x_range)
             if bs_fit.get("converged"):
                 bp = bs_fit["breakpoint"]
@@ -583,51 +634,52 @@ def plot_examples(
                 ax.axvline(bp, color=COLOURS["below_bp"], linestyle="--",
                            linewidth=1, alpha=0.6)
 
-            # Hill fit
-            h = hill_fit(x_vals, y_vals, x_range=x_range)
-            if h.get("converged"):
-                y_min, y_max_fit = h["y_min"], h["y_max"]
-                ec50, hill_n = h["ec50"], h["hill_n"]
-                ratio = np.clip(ec50 / np.maximum(xr, 1e-10), 1e-10, 1e10)
-                yh = y_min + (y_max_fit - y_min) / (1.0 + np.power(ratio, hill_n))
-                ax.plot(xr, yh, color=COLOURS["above_bp"], linewidth=2,
-                        linestyle="-", label=f"Hill EC50={ec50:.1f}")
+            if show_hill:
+                h = hill_fit(x_vals, y_vals, x_range=x_range)
+                if h.get("converged"):
+                    y_min, y_max_fit = h["y_min"], h["y_max"]
+                    ec50, hill_n = h["ec50"], h["hill_n"]
+                    ratio = np.clip(ec50 / np.maximum(xr, 1e-10), 1e-10, 1e10)
+                    yh = y_min + (y_max_fit - y_min) / (1.0 + np.power(ratio, hill_n))
+                    ax.plot(xr, yh, color=COLOURS["above_bp"], linewidth=2,
+                            linestyle="-", label=f"Hill EC50={ec50:.1f}")
+                    bend = h.get("lower_bend")
+                    if bend is not None and not np.isnan(bend):
+                        ax.axvline(bend, color=COLOURS["above_bp"], linestyle=":",
+                                   linewidth=1.5, alpha=0.8,
+                                   label=f"Hill onset={bend:.1f}")
 
-                # Lower bend point
-                bend = h.get("lower_bend")
-                if bend is not None and not np.isnan(bend):
-                    ax.axvline(bend, color=COLOURS["above_bp"], linestyle=":",
-                               linewidth=1.5, alpha=0.8,
-                               label=f"Hill onset={bend:.1f}")
-
-            # Davies p annotation
-            davies_p = animal_row.get(davies_col)
-            pscore_p = animal_row.get(f"{bs_prefix}_pscore_p")
-            anno = []
-            if pd.notna(davies_p):
-                anno.append(f"Davies p={davies_p:.4f}")
-            if pd.notna(pscore_p):
-                anno.append(f"Pscore p={pscore_p:.4f}")
-            if anno:
-                ax.text(0.02, 0.98, "\n".join(anno),
-                        transform=ax.transAxes, va="top", fontsize=8,
-                        color="#555", fontstyle="italic",
-                        bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
-                                  alpha=0.8, edgecolor="#ccc"))
+            if show_davies:
+                davies_p = animal_row.get(davies_col)
+                pscore_p = animal_row.get(f"{bs_prefix}_pscore_p")
+                anno = []
+                if pd.notna(davies_p):
+                    anno.append(f"Davies p={davies_p:.4f}")
+                if pd.notna(pscore_p):
+                    anno.append(f"Pscore p={pscore_p:.4f}")
+                if anno:
+                    ax.text(0.02, 0.98, "\n".join(anno),
+                            transform=ax.transAxes, va="top", fontsize=8,
+                            color="#555", fontstyle="italic",
+                            bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
+                                      alpha=0.8, edgecolor="#ccc"))
 
             ax.set_xlabel(env_label)
             ax.set_ylabel(ylabel)
-            ax.set_title(f"({scenario}) {scenario_title}\n"
-                         f"Animal {aid} ({year}), n={len(grp):,}",
+            title_main = f"({label}) {subtitle}" if subtitle else f"({label})"
+            ax.set_title(f"{title_main}\nAnimal {aid} ({year}), n={len(grp):,}",
                          fontsize=10)
             ax.legend(fontsize=8, loc="lower right")
+
+        for ax in axes_flat[len(selected):]:
+            ax.set_axis_off()
 
         fig.suptitle(
             f"Diagnostic examples: {ylabel.split('(')[0].strip()} vs {env_label}",
             fontsize=13, fontweight="bold",
         )
         fig.tight_layout()
-        save_figure(fig, f"diagnostic_{prefix}", out_dir)
+        save_figure(fig, figname, out_dir)
 
 
 # ─────────────────────────────────────────────────────────────

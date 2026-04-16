@@ -69,6 +69,8 @@ def main() -> None:
     log.info("═══ Step 3/3: Plots ═══")
     cmd = [sys.executable, "-m", "digimuh.viz_runner",
            "--data", args.data]
+    if args.frontiers:
+        cmd.append("--frontiers")
     subprocess.run(cmd, check=True)
 
     log.info("═══ Pipeline complete ═══")
