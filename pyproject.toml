@@ -73,6 +73,7 @@ digimuh-digestive = "digimuh.analysis_06_digestive:main"
 digimuh-circadian = "digimuh.analysis_11_circadian:main"
 digimuh-entropy = "digimuh.analysis_12_motility_entropy:main"
 digimuh-validate = "digimuh.validate_db:main"
+digimuh-milk-yield = "digimuh.milk_yield_classification:main"
 
 [project.urls]
 Repository = "https://github.com/zerotonin/digimuh"
