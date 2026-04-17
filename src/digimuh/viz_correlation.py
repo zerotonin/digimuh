@@ -19,6 +19,7 @@ import pandas as pd
 
 from digimuh.constants import COLOURS
 from digimuh.viz_base import setup_figure, save_figure
+from digimuh.paths import resolve_input
 
 log = logging.getLogger("digimuh.viz")
 
@@ -36,7 +37,7 @@ def plot_cross_correlation(out_dir: Path) -> None:
     import matplotlib.pyplot as plt
     setup_figure()
 
-    xcorr_path = out_dir / "cross_correlation.csv"
+    xcorr_path = resolve_input(out_dir, "cross_correlation.csv")
     if not xcorr_path.exists():
         log.info("  cross_correlation.csv not found, skipping xcorr plots")
         return
@@ -177,7 +178,7 @@ def plot_derivative_ccf(out_dir: Path) -> None:
     import matplotlib.pyplot as plt
     setup_figure()
 
-    dccf_path = out_dir / "derivative_ccf.csv"
+    dccf_path = resolve_input(out_dir, "derivative_ccf.csv")
     if not dccf_path.exists():
         log.info("  derivative_ccf.csv not found, skipping")
         return
@@ -274,7 +275,7 @@ def plot_event_triggered_average(
     import matplotlib.pyplot as plt
     setup_figure()
 
-    traces_path = out_dir / traces_file
+    traces_path = resolve_input(out_dir, traces_file)
     if not traces_path.exists():
         log.info("  %s not found, skipping", traces_file)
         return
@@ -369,7 +370,7 @@ def plot_event_triggered_average(
         # ── Panel D: Additional rumen temperature ────────────
         #    raw body_temp minus cool-day circadian profile at that clock hour
         ax = axes[1, 1]
-        circadian_path = out_dir / "circadian_null_model.csv"
+        circadian_path = resolve_input(out_dir, "circadian_null_model.csv")
         has_clock = "clock_hour" in sub.columns
         has_circ = circadian_path.exists()
 
@@ -478,7 +479,7 @@ def plot_climate_eta(out_dir: Path) -> None:
     import matplotlib.pyplot as plt
     setup_figure()
 
-    path = out_dir / "climate_eta.csv"
+    path = resolve_input(out_dir, "climate_eta.csv")
     if not path.exists():
         log.info("  climate_eta.csv not found, skipping")
         return
