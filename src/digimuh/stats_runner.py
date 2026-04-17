@@ -58,6 +58,7 @@ from digimuh.stats_longitudinal import (
     make_summary_table,
     _run_longitudinal_tests,
 )
+from digimuh.paths import resolve_output, resolve_input
 
 def main() -> None:
     from digimuh.console import (
@@ -87,14 +88,15 @@ def main() -> None:
         banner("Broken-stick statistical analysis")
 
     log.info("Loading CSVs from %s", d)
-    rumen = pd.read_csv(d / "rumen_barn.csv")
-    resp_path = d / "respiration_barn.csv"
+    rumen = pd.read_csv(resolve_input(d, "rumen_barn.csv"))
+    resp_path = resolve_input(d, "respiration_barn.csv")
     if args.no_resp:
         resp = pd.DataFrame()
         log.info("Respiration analysis SKIPPED (--no-resp)")
     else:
         resp = pd.read_csv(resp_path) if resp_path.exists() else pd.DataFrame()
-    prod = pd.read_csv(d / "production.csv") if (d / "production.csv").exists() else pd.DataFrame()
+    prod_path = resolve_input(d, "production.csv")
+    prod = pd.read_csv(prod_path) if prod_path.exists() else pd.DataFrame()
 
     # ── 1. Model fitting ─────────────────────────────────────
     if args.frontiers:
@@ -107,7 +109,7 @@ def main() -> None:
             prod[["animal_id", "year", "mean_milk_yield_kg", "lactation_nr"]],
             on=["animal_id", "year"], how="left",
         )
-    bs.to_csv(d / "broken_stick_results.csv", index=False)
+    bs.to_csv(resolve_output(d, "broken_stick_results.csv"), index=False)
 
     prefixes = [("thi", "THI > body temp"), ("temp", "Barn temp > body temp")]
     if not args.no_resp:
@@ -213,7 +215,7 @@ def main() -> None:
     # ── 2. Spearman ──────────────────────────────────────────
     section("Spearman correlations")
     spearman = compute_spearman(rumen, resp)
-    spearman.to_csv(d / "spearman_correlations.csv", index=False)
+    spearman.to_csv(resolve_output(d, "spearman_correlations.csv"), index=False)
     kv("Body temp vs THI median rs", f"{spearman['thi_rs'].median():.3f}")
     kv("Body temp vs barn temp median rs", f"{spearman['temp_rs'].median():.3f}")
 
@@ -221,14 +223,14 @@ def main() -> None:
     section("Below/above breakpoint",
             "Per-animal means split at individual THI breakpoint")
     beh = compute_below_above(rumen, resp, bs)
-    beh.to_csv(d / "behavioural_response.csv", index=False)
+    beh.to_csv(resolve_output(d, "behavioural_response.csv"), index=False)
     kv("Animals with paired data", len(beh))
 
     # ── 4. Fisher resampling tests ───────────────────────────
     section("Statistical tests",
             "Fisher resampling (reRandomStats), BH-FDR corrected")
     tests = run_statistical_tests(beh)
-    tests.to_csv(d / "statistical_tests.csv", index=False)
+    tests.to_csv(resolve_output(d, "statistical_tests.csv"), index=False)
 
     if not tests.empty:
         test_rows = []
@@ -253,7 +255,7 @@ def main() -> None:
     section("Rumen circadian null model",
             "Hourly rumen temp profile on cool days (no heat stress) vs stress days")
     circadian = compute_circadian_null_model(rumen, bs)
-    circadian.to_csv(d / "circadian_null_model.csv", index=False)
+    circadian.to_csv(resolve_output(d, "circadian_null_model.csv"), index=False)
 
     if not circadian.empty:
         for day_type in ["cool", "stress"]:
@@ -273,7 +275,7 @@ def main() -> None:
     section("THI daily exceedance",
             "Barn THI by clock hour and month — when does heat stress occur?")
     thi_profile = compute_thi_daily_profile(rumen, bs)
-    thi_profile.to_csv(d / "thi_daily_profile.csv", index=False)
+    thi_profile.to_csv(resolve_output(d, "thi_daily_profile.csv"), index=False)
 
     if not thi_profile.empty:
         herd_bp = thi_profile["herd_median_bp"].iloc[0]
@@ -293,7 +295,7 @@ def main() -> None:
     section("Breakpoint crossing times",
             "When during the 24h cycle does each cow's THI cross her breakpoint?")
     crossing_times = compute_crossing_times(rumen, bs)
-    crossing_times.to_csv(d / "crossing_times.csv", index=False)
+    crossing_times.to_csv(resolve_output(d, "crossing_times.csv"), index=False)
 
     if not crossing_times.empty:
         for pred in ["thi", "temp"]:
@@ -311,7 +313,7 @@ def main() -> None:
             "Climate vs rumen temp, below/above breakpoint\n"
             "Raw = includes 24h diurnal cycle; Detrended = per-day mean removed")
     xcorr = compute_cross_correlation(rumen, bs)
-    xcorr.to_csv(d / "cross_correlation.csv", index=False)
+    xcorr.to_csv(resolve_output(d, "cross_correlation.csv"), index=False)
 
     for variant, variant_label in [("raw", "Raw"), ("detrended", "Detrended (diurnal removed)")]:
         xcorr_rows = []
@@ -340,7 +342,7 @@ def main() -> None:
     section("Derivative cross-correlation",
             "d(climate)/dt vs d(body_temp)/dt — temporal coupling of changes")
     dccf = compute_derivative_ccf(rumen, bs)
-    dccf.to_csv(d / "derivative_ccf.csv", index=False)
+    dccf.to_csv(resolve_output(d, "derivative_ccf.csv"), index=False)
 
     dccf_rows = []
     for pred in ["thi", "temp"]:
@@ -372,8 +374,8 @@ def main() -> None:
 
     # Full ETA (all crossing times)
     eta_traces, eta_summary = compute_event_triggered_average(rumen, bs)
-    eta_traces.to_csv(d / "event_triggered_traces.csv", index=False)
-    eta_summary.to_csv(d / "event_triggered_summary.csv", index=False)
+    eta_traces.to_csv(resolve_output(d, "event_triggered_traces.csv"), index=False)
+    eta_summary.to_csv(resolve_output(d, "event_triggered_summary.csv"), index=False)
 
     if not eta_summary.empty:
         for pred in ["thi", "temp"]:
@@ -392,8 +394,8 @@ def main() -> None:
 
     eta_filt_traces, eta_filt_summary = compute_event_triggered_average(
         rumen, bs, crossing_hour_range=(eta_hour_start, eta_hour_end))
-    eta_filt_traces.to_csv(d / "event_triggered_traces_filtered.csv", index=False)
-    eta_filt_summary.to_csv(d / "event_triggered_summary_filtered.csv", index=False)
+    eta_filt_traces.to_csv(resolve_output(d, "event_triggered_traces_filtered.csv"), index=False)
+    eta_filt_summary.to_csv(resolve_output(d, "event_triggered_summary_filtered.csv"), index=False)
 
     if not eta_filt_summary.empty:
         for pred in ["thi", "temp"]:
@@ -410,7 +412,7 @@ def main() -> None:
     climate_eta = compute_climate_eta(
         rumen, bs,
         crossing_hour_range=(eta_hour_start, eta_hour_end))
-    climate_eta.to_csv(d / "climate_eta.csv", index=False)
+    climate_eta.to_csv(resolve_output(d, "climate_eta.csv"), index=False)
 
     if not climate_eta.empty:
         for trigger in ["thi", "temp"]:
@@ -424,18 +426,18 @@ def main() -> None:
     section("Thermoneutral fraction (TNF)",
             "Daily fraction below breakpoint vs daily milk yield (cow-specific P95)")
     tnf = compute_thermoneutral_fraction(rumen, bs)
-    tnf.to_csv(d / "thermoneutral_fraction.csv", index=False)
+    tnf.to_csv(resolve_output(d, "thermoneutral_fraction.csv"), index=False)
     kv("Daily TNF records", len(tnf))
     kv("Animals with TNF", tnf["animal_id"].nunique() if not tnf.empty else 0)
 
     # Load daily milk yield
-    daily_yield_path = d / "daily_milk_yield.csv"
+    daily_yield_path = resolve_input(d, "daily_milk_yield.csv")
     if daily_yield_path.exists() and not tnf.empty:
         daily_yield = pd.read_csv(daily_yield_path)
         kv("Daily yield records", len(daily_yield))
 
         tnf_yield = compute_tnf_yield_analysis(tnf, daily_yield)
-        tnf_yield.to_csv(d / "tnf_yield.csv", index=False)
+        tnf_yield.to_csv(resolve_output(d, "tnf_yield.csv"), index=False)
         kv("Matched cow-day pairs", len(tnf_yield))
         kv("Animals with pairs", tnf_yield["animal_id"].nunique() if not tnf_yield.empty else 0)
 
@@ -550,7 +552,7 @@ def main() -> None:
     section("Breakpoint stability", "Repeat animals across years")
     pairs, icc = compute_stability(bs)
     if not pairs.empty:
-        pairs.to_csv(d / "breakpoint_stability.csv", index=False)
+        pairs.to_csv(resolve_output(d, "breakpoint_stability.csv"), index=False)
     kv("ICC", f"{icc:.3f}")
     kv("Pairs", len(pairs))
     kv("Unique animals", pairs["animal_id"].nunique() if not pairs.empty else 0)
@@ -563,7 +565,7 @@ def main() -> None:
     # ── 8. Summary ───────────────────────────────────────────
     section("Summary table")
     summary = make_summary_table(bs)
-    summary.to_csv(d / "summary_table.csv", index=False)
+    summary.to_csv(resolve_output(d, "summary_table.csv"), index=False)
 
     done(f"All statistics complete. Output in: {d}")
 
