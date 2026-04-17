@@ -55,6 +55,7 @@ from digimuh.viz_longitudinal import (
     plot_longitudinal_sankey,
     plot_threshold_sankey,
 )
+from digimuh.paths import resolve_input
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate broken-stick analysis figures")
@@ -77,17 +78,17 @@ def main() -> None:
     d = args.data
 
     log.info("Loading CSVs from %s …", d)
-    bs = pd.read_csv(d / "broken_stick_results.csv")
-    beh = pd.read_csv(d / "behavioural_response.csv")
-    tests = pd.read_csv(d / "statistical_tests.csv")
-    spearman = pd.read_csv(d / "spearman_correlations.csv")
-    climate = pd.read_csv(d / "climate_daily.csv")
-    rumen = pd.read_csv(d / "rumen_barn.csv")
+    bs = pd.read_csv(resolve_input(d, "broken_stick_results.csv"))
+    beh = pd.read_csv(resolve_input(d, "behavioural_response.csv"))
+    tests = pd.read_csv(resolve_input(d, "statistical_tests.csv"))
+    spearman = pd.read_csv(resolve_input(d, "spearman_correlations.csv"))
+    climate = pd.read_csv(resolve_input(d, "climate_daily.csv"))
+    rumen = pd.read_csv(resolve_input(d, "rumen_barn.csv"))
 
-    resp_path = d / "respiration_barn.csv"
+    resp_path = resolve_input(d, "respiration_barn.csv")
     resp = pd.read_csv(resp_path) if resp_path.exists() else pd.DataFrame()
 
-    stability_path = d / "breakpoint_stability.csv"
+    stability_path = resolve_input(d, "breakpoint_stability.csv")
     pairs = pd.read_csv(stability_path) if stability_path.exists() else pd.DataFrame()
 
     # Read ICC from stats output
