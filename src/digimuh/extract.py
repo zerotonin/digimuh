@@ -35,6 +35,7 @@ import numpy as np
 import pandas as pd
 
 from digimuh.analysis_utils import connect_db, query_df
+from digimuh.paths import resolve_output
 
 log = logging.getLogger("digimuh.extract")
 
@@ -114,6 +115,48 @@ FROM herdeplus
 WHERE animal_id = ?
   AND herdeplus_calving_lactation IS NOT NULL
   AND herdeplus_calving_lactation > 0
+"""
+
+SQL_CALVINGS = """
+SELECT animal_id,
+       date("timestamp") AS calving_date
+FROM smaxtec_events
+WHERE event_type = 'calving_confirmation'
+ORDER BY animal_id, calving_date
+"""
+
+SQL_DAILY_MILK_YIELD_FULL = """
+SELECT animal_id,
+       DATE("timestamp") AS date,
+       SUM(herdeplus_milked_mkg) AS daily_yield_kg,
+       COUNT(*)                   AS n_milkings
+FROM herdeplus
+WHERE animal_id = ?
+  AND herdeplus_milked_mkg IS NOT NULL
+  AND herdeplus_milked_mkg > 0
+GROUP BY animal_id, DATE("timestamp")
+ORDER BY DATE("timestamp")
+"""
+
+SQL_MLP_TEST_DAYS = """
+SELECT animal_id,
+       "timestamp",
+       herdeplus_mlp_mkg,
+       herdeplus_mlp_fat_percent,
+       herdeplus_mlp_fkg,
+       herdeplus_mlp_protein_percent,
+       herdeplus_mlp_ekg_percent,
+       herdeplus_mlp_lactose,
+       herdeplus_mlp_cell_count,
+       herdeplus_mlp_urea,
+       herdeplus_mlp_f_e,
+       herdeplus_mlp_lkg,
+       herdeplus_mlp_ecm,
+       herdeplus_calving_lactation
+FROM herdeplus
+WHERE animal_id = ?
+  AND herdeplus_mlp_fat_percent IS NOT NULL
+ORDER BY "timestamp"
 """
 
 SQL_CLIMATE_DAILY = """
@@ -357,6 +400,104 @@ def extract_daily_milk_yield(con, tierauswahl: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def extract_daily_milk_yield_full(
+    con, tierauswahl: pd.DataFrame,
+) -> pd.DataFrame:
+    """Full-history daily yield per Tierauswahl animal.
+
+    Unlike :func:`extract_daily_milk_yield` this is not restricted
+    to each animal's ``datetime_enter → datetime_exit`` observation
+    window — we pull every day on which the animal has a valid
+    ``herdeplus_milked_mkg`` entry, across her entire HerdePlus
+    history in the DB.
+
+    This is the data source for the full-history Wood (1967) fit
+    used by :func:`digimuh.stats_lactation_curve.compute_wood_residuals`:
+    a per-lactation curve converges far more often when it sees the
+    full pre-peak / post-peak shape instead of a summer slice.
+
+    Args:
+        con: DB connection.
+        tierauswahl: Cleaned Tierauswahl DataFrame (provides the
+            ``animal_id`` set to query).
+
+    Returns:
+        DataFrame with ``animal_id``, ``date`` (datetime64[ns]),
+        ``daily_yield_kg``, ``n_milkings``.
+    """
+    animal_ids = sorted({int(a) for a in tierauswahl["animal_id"].unique()})
+    frames = []
+    for aid in animal_ids:
+        df = query_df(con, SQL_DAILY_MILK_YIELD_FULL, (aid,))
+        if not df.empty:
+            frames.append(df)
+    if not frames:
+        return pd.DataFrame(
+            columns=["animal_id", "date", "daily_yield_kg", "n_milkings"])
+    result = pd.concat(frames, ignore_index=True)
+    result["date"] = pd.to_datetime(result["date"])
+    return result
+
+
+def extract_mlp_test_days(
+    con, tierauswahl: pd.DataFrame,
+) -> pd.DataFrame:
+    """Per-(animal, test-day) MLP composition records for Tierauswahl animals.
+
+    HerdePlus stores two interleaved channels in the same table:
+
+    * high-frequency **per-milking** events
+      (``herdeplus_milked_*`` populated, ``herdeplus_mlp_*`` null)
+    * monthly **MLP (Milchleistungsprüfung) test-day** analytics
+      (``herdeplus_mlp_*`` populated, ``herdeplus_milked_*`` typically null)
+
+    This helper extracts the MLP channel: fat %, protein %, fat-kg,
+    lactose, somatic cell count, urea, fat-to-protein ratio,
+    lactose-kg, and energy-corrected milk (ECM) at one-month
+    resolution.  These are the standard dairy health / composition
+    analytics that would otherwise be missing from the analysis
+    pipeline.
+
+    Args:
+        con: DB connection.
+        tierauswahl: Cleaned Tierauswahl DataFrame.
+
+    Returns:
+        DataFrame with one row per (animal_id, test-day timestamp)
+        and the eleven MLP columns plus ``herdeplus_calving_lactation``.
+    """
+    animal_ids = sorted({int(a) for a in tierauswahl["animal_id"].unique()})
+    frames = []
+    for aid in animal_ids:
+        df = query_df(con, SQL_MLP_TEST_DAYS, (aid,))
+        if not df.empty:
+            frames.append(df)
+    if not frames:
+        return pd.DataFrame()
+    result = pd.concat(frames, ignore_index=True)
+    result["timestamp"] = pd.to_datetime(result["timestamp"])
+    return result
+
+
+def extract_calvings(con) -> pd.DataFrame:
+    """Extract all calving-confirmation events herd-wide.
+
+    Pulls one row per calving from ``smaxtec_events`` across all
+    animals — not just the Tierauswahl — so that downstream Wood
+    (1967) lactation-curve fits can determine DIM for any cow-day
+    including lactations that started before the observation window.
+
+    Returns:
+        DataFrame with ``animal_id`` and ``calving_date``
+        (pandas datetime64[ns], day resolution).
+    """
+    df = query_df(con, SQL_CALVINGS, ())
+    if df.empty:
+        return df
+    df["calving_date"] = pd.to_datetime(df["calving_date"])
+    return df
+
+
 def extract_climate(con, tierauswahl: pd.DataFrame) -> pd.DataFrame:
     """Extract daily barn climate for each summer in the dataset."""
     years = sorted(tierauswahl["year"].dropna().unique().astype(int))
@@ -415,37 +556,68 @@ def main() -> None:
 
     con = connect_db(cfg.database)
     ta = load_tierauswahl(cfg.tierauswahl)
-    ta.to_csv(cfg.output / "tierauswahl.csv", index=False)
+    ta.to_csv(resolve_output(cfg.output, "tierauswahl.csv"), index=False)
     log.info("Tierauswahl: %d entries, years %s",
              len(ta), sorted(ta["year"].dropna().unique().astype(int)))
 
     log.info("Extracting rumen + barn data …")
     rumen = extract_rumen_barn(con, ta, exclude_drinking=exclude_drinking)
-    rumen.to_csv(cfg.output / "rumen_barn.csv", index=False)
+    rumen.to_csv(resolve_output(cfg.output, "rumen_barn.csv"), index=False)
     log.info("  → %d rows, %d animals", len(rumen), rumen["animal_id"].nunique())
 
     log.info("Extracting respiration + barn data …")
     resp = extract_respiration_barn(con, ta)
-    resp.to_csv(cfg.output / "respiration_barn.csv", index=False)
+    resp.to_csv(resolve_output(cfg.output, "respiration_barn.csv"), index=False)
     log.info("  → %d rows, %d animals", len(resp), resp["animal_id"].nunique())
 
     log.info("Extracting production data …")
     prod = extract_production(con, ta)
-    prod.to_csv(cfg.output / "production.csv", index=False)
+    prod.to_csv(resolve_output(cfg.output, "production.csv"), index=False)
     n_milk = prod["mean_milk_yield_kg"].notna().sum()
     n_lac = prod["lactation_nr"].notna().sum()
     log.info("  → %d with milk yield, %d with lactation nr", n_milk, n_lac)
 
     log.info("Extracting daily milk yield …")
     daily_yield = extract_daily_milk_yield(con, ta)
-    daily_yield.to_csv(cfg.output / "daily_milk_yield.csv", index=False)
+    daily_yield.to_csv(resolve_output(cfg.output, "daily_milk_yield.csv"),
+                       index=False)
     log.info("  → %d daily records, %d animals",
              len(daily_yield), daily_yield["animal_id"].nunique() if not daily_yield.empty else 0)
 
+    log.info("Extracting full-history daily milk yield "
+             "(for Wood lactation-curve fitting) …")
+    daily_yield_full = extract_daily_milk_yield_full(con, ta)
+    daily_yield_full.to_csv(
+        resolve_output(cfg.output, "daily_milk_yield_full.csv"), index=False)
+    log.info(
+        "  → %d daily records across full DB history, %d animals",
+        len(daily_yield_full),
+        daily_yield_full["animal_id"].nunique()
+        if not daily_yield_full.empty else 0,
+    )
+
+    log.info("Extracting MLP test-day composition (fat%%, protein%%, "
+             "SCC, urea, ECM, …) …")
+    mlp = extract_mlp_test_days(con, ta)
+    mlp.to_csv(resolve_output(cfg.output, "mlp_test_days.csv"), index=False)
+    log.info(
+        "  → %d MLP test-day rows, %d animals",
+        len(mlp),
+        mlp["animal_id"].nunique() if not mlp.empty else 0,
+    )
+
     log.info("Extracting barn climate …")
     climate = extract_climate(con, ta)
-    climate.to_csv(cfg.output / "climate_daily.csv", index=False)
+    climate.to_csv(resolve_output(cfg.output, "climate_daily.csv"),
+                   index=False)
     log.info("  → %d daily records", len(climate))
+
+    log.info("Extracting calving events …")
+    calvings = extract_calvings(con)
+    calvings.to_csv(resolve_output(cfg.output, "calvings.csv"), index=False)
+    log.info("  → %d calvings from %d animals",
+             len(calvings),
+             calvings["animal_id"].nunique() if not calvings.empty else 0)
 
     con.close()
     log.info("Extraction complete. CSVs in: %s", cfg.output)
