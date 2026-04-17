@@ -22,6 +22,7 @@ from digimuh.constants import (
     DELTA_STABLE, DELTA_MODERATE, MIN_COHORT_SIZE,
 )
 from digimuh.viz_base import setup_figure, save_figure
+from digimuh.paths import resolve_input, resolve_output
 
 log = logging.getLogger("digimuh.viz")
 
@@ -190,7 +191,7 @@ def plot_breakpoint_raincloud(out_dir: Path) -> None:
     from scipy.stats import gaussian_kde, kruskal
     setup_figure()
 
-    path = out_dir / "crossing_times.csv"
+    path = resolve_input(out_dir, "crossing_times.csv")
     if not path.exists():
         log.info("  crossing_times.csv not found, skipping crossing count raincloud")
         return
@@ -715,7 +716,7 @@ def plot_threshold_sankey(bs: pd.DataFrame, out_dir: Path) -> None:
         )
 
         # Save as interactive HTML (skip SVG/PNG: kaleido+chromium hangs)
-        fig.write_html(str(out_dir / f"sankey_{prefix}.html"),
+        fig.write_html(str(resolve_output(out_dir, f"sankey_{prefix}.html")),
                         include_plotlyjs="cdn")
         log.info("  Saved sankey_%s.html", prefix)
 
