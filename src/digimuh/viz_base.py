@@ -28,10 +28,18 @@ def setup_figure() -> None:
 
 
 def save_figure(fig, name: str, out_dir: Path) -> None:
-    """Save figure as SVG + PNG and close."""
-    out_dir.mkdir(parents=True, exist_ok=True)
+    """Save figure as SVG + PNG and close.
+
+    The target folder is resolved through
+    :func:`digimuh.paths.resolve_output`, which routes the file into
+    a subject-specific subfolder (e.g. ``03_temporal``) when the
+    stem is known.  Callers stay unaware of the subfolder mapping —
+    they pass the same ``name`` / ``out_dir`` as before.
+    """
+    from digimuh.paths import resolve_output
     for ext in ("svg", "png"):
-        fig.savefig(out_dir / f"{name}.{ext}")
+        dest = resolve_output(out_dir, f"{name}.{ext}")
+        fig.savefig(dest)
     import matplotlib.pyplot as plt
     plt.close(fig)
 
