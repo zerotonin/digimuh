@@ -18,6 +18,7 @@ import pandas as pd
 
 from digimuh.constants import COLOURS
 from digimuh.viz_base import setup_figure, save_figure
+from digimuh.paths import resolve_input
 
 log = logging.getLogger("digimuh.viz")
 
@@ -122,7 +123,7 @@ def plot_circadian_null_model(out_dir: Path) -> None:
     from scipy.stats import gaussian_kde
     setup_figure()
 
-    path = out_dir / "circadian_null_model.csv"
+    path = resolve_input(out_dir, "circadian_null_model.csv")
     if not path.exists():
         log.info("  circadian_null_model.csv not found, skipping")
         return
@@ -141,7 +142,7 @@ def plot_circadian_null_model(out_dir: Path) -> None:
 
     # ── Crossing density KDE per predictor ─────────────────
     kdes: dict[str, tuple] = {}
-    crossing_path = out_dir / "crossing_times.csv"
+    crossing_path = resolve_input(out_dir, "crossing_times.csv")
     if crossing_path.exists():
         ct = pd.read_csv(crossing_path)
         for pred in ("thi", "temp"):
@@ -293,7 +294,7 @@ def plot_thi_daily_profile(out_dir: Path) -> None:
     import matplotlib.pyplot as plt
     setup_figure()
 
-    path = out_dir / "thi_daily_profile.csv"
+    path = resolve_input(out_dir, "thi_daily_profile.csv")
     if not path.exists():
         log.info("  thi_daily_profile.csv not found, skipping")
         return
@@ -399,7 +400,7 @@ def plot_crossing_raster(out_dir: Path) -> None:
     from matplotlib.collections import PathCollection
     setup_figure()
 
-    path = out_dir / "crossing_times.csv"
+    path = resolve_input(out_dir, "crossing_times.csv")
     if not path.exists():
         log.info("  crossing_times.csv not found, skipping raster plot")
         return
