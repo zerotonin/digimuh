@@ -41,7 +41,9 @@ For each of 255 animal-years in the extended Tierauswahl:
 
 ### 3.1 Broken-stick regression
 
-Two-segment piecewise linear model per animal.  Breakpoint psi found by grid search (200 points) + bounded minimisation.  Biological constraint: `b2 > b1` and `b2 > 0`.  Search ranges: THI 45-80, barn temp 5-35 C.
+Two-segment piecewise linear model per animal.  Breakpoint ψ found by grid search (200 points) + bounded minimisation.  Biological constraint: `b2 > b1` and `b2 > 0`.  Search ranges: THI 45-80, barn temp 5-35 C.
+
+**Per-fit profile-RSS standard error.** Each converged fit also carries a 95 % profile-RSS confidence interval on the breakpoint, derived from the existing 200-point RSS grid as `{ψ : RSS(ψ) ≤ RSS_min × (1 + F_{0.95;1,n−4} / (n − 4))}`, with linear interpolation between adjacent grid points to locate the threshold crossings.  The half-CI-width / 1.96 is reported as `breakpoint_se` and used as the per-fit measurement uncertainty in the repeatability analysis (§3.13).  Fits whose interval hits the search bounds carry `breakpoint_ci_truncated = True` (8 / 206 THI fits, 0 / 176 barn-temp fits) and their SE is treated as a lower bound.  The SE is computed under iid-Gaussian-residual assumptions; given that smaXtec readings sample at ~10-min intervals with strong diurnal autocorrelation, the realised effective sample size is much smaller than `n` and the iid SE is consequently a *lower bound* on true measurement uncertainty — this is acknowledged in §3.13's interpretation.
 
 ### 3.2 Breakpoint existence tests (reserved for COMPAG)
 
@@ -87,9 +89,65 @@ Both barn THI and barn temperature extracted +/-6 hours around each crossing, no
 
 Daily TNF = fraction of readings where barn THI <= cow's breakpoint.  Yield normalised to cow-specific P95 (95th percentile of daily yields).  Spearman correlation: pooled and per-cow within-animal.  Heat-stress-only filter at TNF thresholds 0.95/0.90/0.80/0.70.
 
-### 3.13 Breakpoint stability
+### 3.13 Breakpoint stability — repeatability ICC(1,1)
 
-ICC for repeat animals.  Pairwise year comparisons via Fisher resampling (BH-FDR).
+**Question.** Is a cow's individual THI / barn-temp breakpoint a *trait* — something you would expect to see again next summer — or a noisy single-summer estimate?  We answer with the one-way random-effects intraclass correlation coefficient on multi-year converged breakpoints, following Shrout & Fleiss (1979) Type 1 / McGraw & Wong (1996):
+
+    ICC(1,1) = (MS_between − MS_within) / (MS_between + (k−1) × MS_within)
+
+where `MS_between` and `MS_within` come from a one-way ANOVA on the cow-grouping of breakpoints, and `k` is the harmonic-mean number of converged years per cow (≈ 2.13 for THI; ≈ 2.12 for barn temp; the design is mildly unbalanced because 6/49 multi-year animals have three converged years and the remaining 43 have two).  Test statistic `F = MS_between / MS_within`; 95% CI from the F-distribution as in Shrout & Fleiss (1979).  An ICC near 1 means the breakpoint is a stable individual trait; near 0 means within-cow year-to-year variation is comparable to between-cow variation.
+
+**Cohort.**  Of 200 unique animals contributing to the broken-stick fits, 49 (24.5%) appear in ≥2 years (43 × 2 yr, 6 × 3 yr).  After requiring a *converged* fit in those years, the THI ICC uses 32 animals / 68 cow-years and the barn-temp ICC uses 25 / 53.  Respiration is excluded — zero respiration breakpoints converge under the Frontiers configuration (§3.1).
+
+**Four flavours.**  We report the ICC four times per predictor so the reader can disentangle three potential sources of within-cow scatter (lactation-stage drift, fit precision, and irreducible biological year-to-year change):
+
+- **`raw`.**  Direct ICC on the converged breakpoint values.  The number Shrout-&-Fleiss-style stability papers usually print.
+- **`raw (SE-cohort)`.**  Same as `raw` but on the strict subset that also has a finite per-fit profile-RSS standard error (a few fits at the search boundary lack a finite SE).  Reported so the comparison against `measurement-corrected` is on identical observations and any difference between the two reflects the correction itself, not the cohort.
+- **`measurement-corrected`.**  Subtracts σ²_meas — the average squared per-fit profile-RSS SE on the breakpoint (§3.1) — from the within-cow mean square *before* computing the ICC.  Formally σ²_within,observed = σ²_drift + σ²_meas, so ICC_corrected = σ²_between / (σ²_between + σ²_drift) where σ²_drift = max(MS_within − σ²_meas, 0).  Confidence intervals come from a 2 000-draw parametric bootstrap on (MS_between, MS_within) under the one-way random-effects model with the observed σ²_meas held fixed; the bootstrap clips negative variance components at zero, so a CI lower bound at exactly 0 indicates the data are consistent with no between-cow variance.
+- **`residual`.**  ICC on OLS residuals of `breakpoint ~ parity_bucket(1/2/3+) + mean_DIM`, fitted on the *full* converged cohort (THI: n = 206; barn temp: n = 176) and re-evaluated on the multi-year subset.  `mean_DIM` is the cow-year mean days-in-milk from the Wood-fit frame (`daily_milk_yield_wood.csv`).  Separates "did this cow's *thermal physiology* drift between summers" from "was she just older / later in lactation the second summer."
+
+**Result.**
+
+| Predictor | Mode | n animals | n obs | k̄ | ICC | 95% CI | F | p |
+|---|---|---:|---:|---:|---:|---|---|---:|
+| THI breakpoint | raw | 32 | 68 | 2.12 | **−0.095** | [−0.38, +0.23] | F(31,36)=0.82 | 0.72 |
+| THI breakpoint | raw (SE-cohort) | 28 | 59 | 2.11 | −0.006 | [−0.33, +0.34] | F(27,31)=0.99 | 0.51 |
+| THI breakpoint | measurement-corrected | 28 | 59 | 2.11 | **0.000** | [0.00, +0.33] | F(27,31)=0.99 | 0.51 |
+| THI breakpoint | residual | 31 | 66 | 2.13 | −0.032 | [−0.33, +0.30] | F(30,35)=0.93 | 0.57 |
+| Barn temp breakpoint | raw | 25 | 53 | 2.12 | **−0.145** | [−0.46, +0.23] | F(24,28)=0.73 | 0.78 |
+| Barn temp breakpoint | raw (SE-cohort) | 17 | 35 | 2.06 | −0.024 | [−0.45, +0.44] | F(16,18)=0.95 | 0.54 |
+| Barn temp breakpoint | measurement-corrected | 17 | 35 | 2.06 | **0.000** | [0.00, +0.43] | F(16,18)=0.95 | 0.54 |
+| Barn temp breakpoint | residual | 24 | 51 | 2.12 | −0.033 | [−0.37, +0.34] | F(23,27)=0.93 | 0.56 |
+
+**Variance decomposition (THI multi-year cohort).**
+
+| Quantity | Value |
+|---|---:|
+| MS_between (cohort-matched) | 53.2 THI² |
+| MS_within (cohort-matched) | 53.5 THI² |
+| σ²_meas (mean of per-fit SE²) | 0.55 THI² |
+| σ²_drift (= MS_within − σ²_meas) | 52.9 THI² |
+| σ²_between (ANOVA estimate) | 0.0 THI² (clipped from a small negative value) |
+
+**Reading.**  All four flavours sit at ICC ≈ 0, all four 95 % CIs span zero (none reaches even the moderate-stability band ≥ 0.50), and F is < 1 on every row — there is no detectable between-cow signal in the multi-year cohort under any of the corrections.  Three observations are worth pulling out:
+
+1. **The negative `raw` ICC on the full cohort (−0.095) shrinks to ≈ 0 once we restrict to the cohort with finite per-fit SE.**  Five THI cow-years lacking a finite profile-RSS interval (their breakpoint sits at the search boundary) were pulling MS_between down; on the strictly comparable cohort the raw ICC is essentially zero, not negative.
+2. **The measurement-correction shifts the ICC by ≈ 0.005, not the ≈ 0.20 a noisy-fit-rescuing-stable-trait scenario would have produced.**  σ²_meas comes out at 0.55 THI² — only ~1% of the within-cow MS of 53.5 THI².  Even inflating σ²_meas by 50× to account for temporal autocorrelation in the smaXtec readings (10-min sampling, diurnal rhythm; iid-residual SEs are likely an underestimate by roughly that factor) would leave σ²_drift ≈ 26 THI², still much larger than the (effectively zero) between-cow variance — so the conclusion is robust to the iid assumption.
+3. **The variance decomposition is the cleanest summary.**  σ²_between estimates to ≈ 0 on the multi-year cohort regardless of correction; the between-cow signal isn't being hidden by fit noise, it simply isn't there at this n.
+
+**Power-bounded interpretation.**  At n = 32 animals × k̄ = 2.12 the F-test rejects the null at α = 0.05 with 94 % power if the true ICC is 0.5, 81 % at 0.4, but only 58 % at 0.3 and 33 % at 0.2.  Bootstrap CIs in the table extend up to ≈ 0.34 (THI corrected) and ≈ 0.43 (barn temp corrected), so the data **rule out strong individual repeatability (true ICC ≥ 0.5) but cannot rule out weak repeatability (true ICC ≤ 0.3)**.  The observed point estimates near zero plus the cleanly zero σ²_between favour the no-stable-trait interpretation, but the honest position is "no stable trait *detected*; sample size limits resolution below true ICC ≈ 0.3."  Doubling the cohort to n ≈ 80 multi-year animals would give 90 % power at ρ = 0.3 and a 95 % CI half-width of ≈ 0.20 around any observed point estimate.
+
+**Interpretation for the manuscript.**  An individual cow's THI / barn-temp breakpoint is **not** a stable physiological trait at this herd-year sample size, and the negative finding survives both parity / DIM residualisation and measurement-error correction.  We report it rather than gate on it: cow-summer breakpoints should be phrased as cow-summer estimates, not as individual heat-tolerance thresholds, and any cow-level intervention recommendation requires either re-measuring each summer or a much larger multi-year cohort.
+
+**References.**
+- Shrout, P.E., Fleiss, J.L. (1979) Intraclass correlations: uses in assessing rater reliability.  *Psychological Bulletin* 86:420–428.  doi:10.1037/0033-2909.86.2.420
+- McGraw, K.O., Wong, S.P. (1996) Forming inferences about some intraclass correlation coefficients.  *Psychological Methods* 1:30–46.  doi:10.1037/1082-989X.1.1.30
+
+**Power.**  Our cohort (n = 32 animals, k̄ ≈ 2.12) detects a true ICC of 0.3 with only ~58% power at α = 0.05, and ~33% power for ρ = 0.2; we therefore cannot rule out a weakly stable trait.  We *can* rule out strong stability: the test would reject the null at ≥ 80% power for ρ ≥ 0.4 and at ≥ 94% power for ρ ≥ 0.5.  In other words, this analysis is informative against high repeatability (ICC ≥ 0.5) but not against modest repeatability (ICC in [0.1, 0.3]).  Doubling the cohort to n ≈ 80 multi-year animals would give 90% power at ρ = 0.3 and a 95% CI half-width of ~0.20 around any observed point estimate.
+
+**Cohort sensitivity sweep.**  We re-ran the §3.13 ICC pipeline on three nested cohorts so the negative-repeatability finding can be checked against any plausible cohort definition: (1) **strict** — `Tierauswahl.xlsx` (Gundi's tight selection, 220 cow-years / 181 animals, all in groups 1005/1006); (2) **extended** — `Tierauswahl_extended.xlsx` (current default, 255 / 200, also in 1005/1006); (3) **neubau** — every (animal_id, summer) pair from the DB `allocations` table where the animal spent ≥ 30 days in groups 1005/1006 during Jun–Sep, including 480 animals not selected for either Tierauswahl version.  Each cohort triggers an independent rumen+barn extraction, broken-stick refit, ICC computation and forest plot, written under cohort-suffixed filenames (`broken_stick_results_<cohort>.csv`, `breakpoint_icc_<cohort>.csv`, `breakpoint_icc_<cohort>_forest.{svg,png}`).  The cohort comparison is reported in the manuscript as a sensitivity check; the *primary* cohort for the headline numbers in this section remains the extended Tierauswahl (255 cow-years).
+
+**Outputs.**  `breakpoint_icc.csv` (one row per predictor × mode, with ICC, 95% CI, F, df1, df2, p, n_animals, n_obs, k).  `breakpoint_icc_forest.{svg,png}` is the matching forest plot — point + 95% CI per row, with reference bands at the conventional Koo & Li (2016) thresholds (poor < 0.5, moderate 0.5–0.75, good 0.75–0.9, excellent > 0.9).  Cohort-suffixed siblings (`breakpoint_icc_strict.csv`, `breakpoint_icc_extended.csv`, `breakpoint_icc_neubau.csv` plus matching `_forest.{svg,png}` figures) are produced by `scripts/run_icc_cohort_sweep.py`.  `breakpoint_stability.csv` keeps the year-to-year paired-breakpoint frame used by the Fisher resampling tests below (BH-FDR pairwise year comparisons).
 
 ### 3.14 Longitudinal breakpoint stability (alluvial)
 
@@ -450,7 +508,11 @@ results/broken_stick/
 │   mlp_dilution_partition.{svg,png}
 │
 └── 06_longitudinal/               year-on-year stability + Sankey
-    breakpoint_stability.csv       ICC pairs
+    breakpoint_icc.csv             ICC(1,1) raw / residual / measurement-corrected (§3.13)
+    breakpoint_icc_forest.{svg,png} Forest plot of ICC point + 95% CI
+    breakpoint_icc_{strict,extended,neubau}.csv  Cohort-sensitivity sweep
+    breakpoint_icc_{strict,extended,neubau}_forest.{svg,png}
+    breakpoint_stability.csv       Year-paired breakpoint frame
     breakpoint_stability.{svg,png}
     longitudinal_{thi,temp}.{svg,png}
     sankey_*.html                  Alluvial stability + threshold pipeline
