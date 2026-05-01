@@ -292,6 +292,135 @@ def plot_breakpoint_raincloud(out_dir: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────
+#  « breakpoint ICC forest plot »
+# ─────────────────────────────────────────────────────────────
+
+def plot_breakpoint_icc(out_dir: Path,
+                         csv_stem: str = "breakpoint_icc",
+                         figure_stem: str = "breakpoint_icc_forest",
+                         title_suffix: str = "",
+                         ) -> None:
+    """Forest plot of one-way ICC(1,1) for multi-year breakpoints.
+
+    Reads the cohort-specific ICC CSV (default ``breakpoint_icc.csv``)
+    and renders a forest with point estimates, 95% CIs, the n / k
+    label next to each row, and three reference lines: ICC = 0 (no
+    repeatability — within = between), ICC = 0.5 ("moderate"
+    repeatability, Koo & Li 2016), and ICC = 0.75 ("good").  Pass
+    ``csv_stem='breakpoint_icc_strict'`` and
+    ``figure_stem='breakpoint_icc_strict_forest'`` to render a
+    cohort-suffixed variant.
+    """
+    import matplotlib.pyplot as plt
+
+    icc_path = resolve_input(out_dir, f"{csv_stem}.csv")
+    if not icc_path.exists():
+        log.info("  %s.csv not found — skipping forest plot", csv_stem)
+        return
+    df = pd.read_csv(icc_path)
+    if df.empty:
+        return
+
+    setup_figure()
+
+    df = df.copy()
+    df["row_label"] = df.apply(
+        lambda r: f"{r['predictor']} — {r['mode']}", axis=1)
+    # Plot rows top-to-bottom in the order they appear in the CSV;
+    # invert the y-axis so the first row sits at the top.
+    df = df.reset_index(drop=True)
+    y = np.arange(len(df))[::-1]
+
+    colours = {
+        "raw":                                  "#0072B2",   # Wong blue
+        "raw (SE-cohort)":                      "#56B4E9",   # Wong sky blue
+        "measurement-corrected":                "#009E73",   # Wong green
+        "residual":                             "#E69F00",   # Wong orange
+        "parity + DIM residual":                "#E69F00",   # Wong orange
+        "parity + DIM + meas-corr":             "#CC79A7",   # Wong pink
+        "parity + DIM + yield residual":        "#D55E00",   # Wong vermillion
+        "parity + DIM + yield + meas-corr":     "#000000",   # black (fully corrected)
+    }
+    point_colours = [colours.get(m, "#999999") for m in df["mode"]]
+
+    fig, ax = plt.subplots(figsize=(8.0, 0.55 * len(df) + 2.2))
+
+    # Reference bands / lines
+    ax.axvspan(0.50, 0.75, color="#dddddd", alpha=0.45,
+               label="moderate (0.50–0.75)")
+    ax.axvspan(0.75, 1.00, color="#bbbbbb", alpha=0.55,
+               label="good (≥ 0.75)")
+    ax.axvline(0.0,  color="#444444", lw=1.2, ls="--", zorder=1)
+    ax.axvline(0.50, color="#666666", lw=0.8, ls=":",  zorder=1)
+    ax.axvline(0.75, color="#666666", lw=0.8, ls=":",  zorder=1)
+
+    # CI bars + points
+    for i, (_, r) in zip(y, df.iterrows()):
+        ax.hlines(i, r["ci_lower"], r["ci_upper"],
+                  color=colours.get(r["mode"], "#999999"),
+                  linewidth=2.4, zorder=3)
+        ax.plot([r["ci_lower"], r["ci_upper"]],
+                [i, i], marker="|", markersize=10,
+                color=colours.get(r["mode"], "#999999"),
+                linestyle="none", zorder=4)
+    ax.scatter(df["icc"], y, s=80, c=point_colours,
+               edgecolors="white", linewidths=1.2, zorder=5)
+
+    # Right-side annotation: n animals / n obs / p
+    x_text = -1.05
+    for i, (_, r) in zip(y, df.iterrows()):
+        sig = ""
+        if pd.notna(r["p"]):
+            sig = (" ***" if r["p"] < .001 else
+                   " **" if r["p"] < .01 else
+                   " *" if r["p"] < .05 else "")
+        ax.text(1.05, i,
+                f"  n={int(r['n_animals'])}  obs={int(r['n_obs'])}  "
+                f"p={r['p']:.2f}{sig}",
+                va="center", ha="left", fontsize=9, color="#333333",
+                transform=ax.get_yaxis_transform())
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(df["row_label"], fontsize=10)
+    ax.set_xlabel("ICC(1,1)  —  point estimate ± 95% CI")
+    ax.set_xlim(-1.05, 1.05)
+    title_main = "Repeatability of individual cow breakpoints across summers"
+    if title_suffix:
+        title_main = f"{title_main}  —  {title_suffix}"
+    ax.set_title(
+        f"{title_main}\n"
+        "(Shrout & Fleiss 1979 / McGraw & Wong 1996; multi-year converged subset)",
+        fontsize=11, loc="left", pad=10,
+    )
+    ax.grid(False)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    # Mode legend (raw vs residual) only — reference bands are
+    # already labelled by the axvspan calls below the curves.
+    from matplotlib.lines import Line2D
+    # Build legend dynamically from the modes that actually appear,
+    # keyed in a sensible visual order.
+    visual_order = [
+        "raw", "raw (SE-cohort)", "measurement-corrected",
+        "parity + DIM residual", "parity + DIM + meas-corr",
+        "parity + DIM + yield residual", "parity + DIM + yield + meas-corr",
+        "residual",  # legacy alias
+    ]
+    seen = list(df["mode"].unique())
+    handles = [
+        Line2D([0], [0], marker="o", color=colours.get(m, "#999999"),
+               lw=0, markersize=8, label=m)
+        for m in visual_order if m in seen
+    ]
+    handles.append(Line2D([0], [0], color="#444444", lw=1.2, ls="--",
+                          label="ICC = 0"))
+    ax.legend(handles=handles, loc="upper left", frameon=False,
+              fontsize=8, ncol=3, bbox_to_anchor=(0.0, -0.10))
+    fig.tight_layout()
+    save_figure(fig, figure_stem, out_dir)
+
+
+# ─────────────────────────────────────────────────────────────
 #  « longitudinal breakpoint stability Sankey »
 # ─────────────────────────────────────────────────────────────
 
