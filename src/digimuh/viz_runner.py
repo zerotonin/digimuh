@@ -52,6 +52,7 @@ from digimuh.viz_production import plot_tnf_yield
 from digimuh.viz_longitudinal import (
     plot_longitudinal_breakpoints,
     plot_breakpoint_raincloud,
+    plot_breakpoint_icc,
     plot_longitudinal_sankey,
     plot_threshold_sankey,
 )
@@ -140,6 +141,7 @@ def main() -> None:
         ("TNF vs yield", lambda: plot_tnf_yield(d)),
         ("Longitudinal breakpoints", lambda: plot_longitudinal_breakpoints(bs, d)),
         ("Breakpoint raincloud", lambda: plot_breakpoint_raincloud(d)),
+        ("Breakpoint ICC forest", lambda: plot_breakpoint_icc(d)),
         ("Longitudinal Sankey", lambda: plot_longitudinal_sankey(bs, d)),
         ("Sankey diagrams", lambda: plot_threshold_sankey(bs, d)),
     ]
