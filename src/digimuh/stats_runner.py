@@ -55,6 +55,7 @@ from digimuh.stats_production import (
 )
 from digimuh.stats_longitudinal import (
     compute_stability,
+    compute_breakpoint_icc,
     make_summary_table,
     _run_longitudinal_tests,
 )
@@ -556,6 +557,38 @@ def main() -> None:
     kv("ICC", f"{icc:.3f}")
     kv("Pairs", len(pairs))
     kv("Unique animals", pairs["animal_id"].nunique() if not pairs.empty else 0)
+
+    # ── 8b. Repeatability ICC(1,1) — raw + parity/DIM-residualised ─
+    section("Breakpoint repeatability ICC(1,1)",
+            "Multi-year converged animals; raw + parity+DIM-residualised")
+    wood_path = resolve_input(d, "daily_milk_yield_wood.csv")
+    wood_yield = pd.read_csv(wood_path) if wood_path.exists() else pd.DataFrame()
+    icc_df = compute_breakpoint_icc(bs, wood_yield=wood_yield)
+    if not icc_df.empty:
+        icc_df.to_csv(resolve_output(d, "breakpoint_icc.csv"), index=False)
+        icc_rows = []
+        for _, r in icc_df.iterrows():
+            ci = (f"[{r['ci_lower']:.2f}, {r['ci_upper']:.2f}]"
+                  if pd.notna(r["ci_lower"]) else "—")
+            icc_rows.append([
+                r["predictor"], r["mode"],
+                int(r["n_animals"]), int(r["n_obs"]),
+                f"{r['k_mean']:.2f}" if pd.notna(r["k_mean"]) else "—",
+                f"{r['icc']:.3f}" if pd.notna(r["icc"]) else "—",
+                ci,
+                f"F({int(r['df1'])},{int(r['df2'])})={r['f']:.2f}"
+                    if pd.notna(r["f"]) else "—",
+                f"{r['p']:.4f}" if pd.notna(r["p"]) else "—",
+                stars_styled(p_to_stars(r["p"])) if pd.notna(r["p"]) else "",
+            ])
+        result_table(
+            "ICC(1,1) — between-cow vs within-cow variance",
+            ["Predictor", "Mode", "N animals", "N obs", "k", "ICC",
+             "95% CI", "F", "p", "Sig."],
+            icc_rows,
+        )
+    else:
+        kv("ICC table", "no multi-year converged animals")
 
     # ── 7. Longitudinal statistical tests ────────────────────
     section("Longitudinal breakpoint tests",
