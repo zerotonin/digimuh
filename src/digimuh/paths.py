@@ -117,6 +117,8 @@ _STEM_TO_SUBJECT: dict[str, str] = {
 
     # ── 06 longitudinal ───────────────────────────────────
     "breakpoint_stability":             "longitudinal",
+    "breakpoint_icc":                   "longitudinal",
+    "breakpoint_icc_forest":            "longitudinal",
 }
 
 
@@ -129,6 +131,7 @@ _PREFIX_RULES: tuple[tuple[str, str], ...] = (
     ("boxplot_grouped_",         "breakpoints"),
     ("paired_below_above_",      "breakpoints"),
     ("predictors_",              "breakpoints"),
+    ("broken_stick_results_",    "breakpoints"),
 
     # temporal
     ("thi_daily_profile_",       "temporal"),
@@ -153,6 +156,8 @@ _PREFIX_RULES: tuple[tuple[str, str], ...] = (
     ("longitudinal_",            "longitudinal"),
     ("sankey_",                  "longitudinal"),
     ("raincloud_crossing_count_","longitudinal"),
+    ("breakpoint_icc_",          "longitudinal"),
+    ("breakpoint_stability_",    "longitudinal"),
 )
 
 
