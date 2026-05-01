@@ -42,7 +42,11 @@ def broken_stick_fit(
         n_grid: Grid resolution for initial search.
 
     Returns:
-        Dict with breakpoint, slopes, R², convergence status.
+        Dict with breakpoint, slopes, R², convergence status, and
+        the profile-RSS 95% CI on the breakpoint (``breakpoint_ci_lo``,
+        ``breakpoint_ci_hi``, plus ``breakpoint_se`` derived from the
+        half-CI-width / 1.96).  ``breakpoint_ci_truncated`` flags fits
+        whose interval hits the search bounds.
     """
     mask = np.isfinite(x) & np.isfinite(y)
     x, y = x[mask], y[mask]
@@ -92,6 +96,46 @@ def broken_stick_fit(
     slope_below, slope_above = cl[1], cr[1]
     valid = slope_above > slope_below and slope_above > 0
 
+    # ── Profile-RSS 95% CI on the breakpoint ────────────────
+    # Confidence set = {bp : RSS(bp) ≤ RSS_min × (1 + F_crit / df_resid)}
+    # for a one-parameter constraint at the 1−α level (F_{1,df}).
+    # We already evaluated RSS on ``grid`` above; we interpolate
+    # the threshold crossings linearly between adjacent grid
+    # points and clamp to the search range.
+    from scipy.stats import f as _f_dist
+    p_linear = 4  # two intercepts, two slopes
+    df_resid = n - p_linear
+    ci_lo = ci_hi = bp_se = np.nan
+    truncated = False
+    if df_resid > 0 and final_rss > 0 and valid:
+        f_crit = float(_f_dist.ppf(0.95, 1, df_resid))
+        rss_thresh = final_rss * (1.0 + f_crit / df_resid)
+        ok = rss_vals <= rss_thresh
+        if ok.any():
+            lo_idx, hi_idx = int(np.argmax(ok)), int(len(ok) - 1 - np.argmax(ok[::-1]))
+
+            def _interp_cross(i_out: int, i_in: int) -> float:
+                """Linear interp where rss crosses ``rss_thresh``."""
+                ri, rj = rss_vals[i_out], rss_vals[i_in]
+                if not (np.isfinite(ri) and np.isfinite(rj)) or ri == rj:
+                    return float(grid[i_in])
+                t = (rss_thresh - ri) / (rj - ri)
+                return float(grid[i_out] + t * (grid[i_in] - grid[i_out]))
+
+            if lo_idx > 0:
+                ci_lo = _interp_cross(lo_idx - 1, lo_idx)
+            else:
+                ci_lo = float(grid[0])
+                truncated = True
+            if hi_idx < len(grid) - 1:
+                ci_hi = _interp_cross(hi_idx + 1, hi_idx)
+            else:
+                ci_hi = float(grid[-1])
+                truncated = True
+            # Clamp ordering and sanity
+            ci_lo, ci_hi = min(ci_lo, ci_hi), max(ci_lo, ci_hi)
+            bp_se = (ci_hi - ci_lo) / (2.0 * 1.96)
+
     return {
         "breakpoint": bp if valid else np.nan,
         "slope_below": slope_below,
@@ -103,6 +147,10 @@ def broken_stick_fit(
         "n_below": int(left.sum()),
         "n_above": int(right.sum()),
         "converged": valid,
+        "breakpoint_ci_lo": ci_lo,
+        "breakpoint_ci_hi": ci_hi,
+        "breakpoint_se": bp_se,
+        "breakpoint_ci_truncated": truncated,
         "rejected_reason": (
             None if valid
             else f"slope_above ({slope_above:.4f}) <= slope_below ({slope_below:.4f})"
