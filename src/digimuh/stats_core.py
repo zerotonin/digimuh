@@ -209,6 +209,10 @@ def run_broken_stick_fits(
             "n_resp_readings": len(resp_grp),
             # Body temp vs THI
             "thi_breakpoint": thi_fit["breakpoint"],
+            "thi_breakpoint_ci_lo": thi_fit.get("breakpoint_ci_lo"),
+            "thi_breakpoint_ci_hi": thi_fit.get("breakpoint_ci_hi"),
+            "thi_breakpoint_se": thi_fit.get("breakpoint_se"),
+            "thi_breakpoint_ci_truncated": thi_fit.get("breakpoint_ci_truncated", False),
             "thi_slope_below": thi_fit.get("slope_below"),
             "thi_slope_above": thi_fit.get("slope_above"),
             "thi_r_squared": thi_fit.get("r_squared"),
@@ -222,6 +226,10 @@ def run_broken_stick_fits(
             "thi_hill_converged": thi_hill.get("converged", False),
             # Body temp vs barn temp
             "temp_breakpoint": temp_fit["breakpoint"],
+            "temp_breakpoint_ci_lo": temp_fit.get("breakpoint_ci_lo"),
+            "temp_breakpoint_ci_hi": temp_fit.get("breakpoint_ci_hi"),
+            "temp_breakpoint_se": temp_fit.get("breakpoint_se"),
+            "temp_breakpoint_ci_truncated": temp_fit.get("breakpoint_ci_truncated", False),
             "temp_slope_below": temp_fit.get("slope_below"),
             "temp_slope_above": temp_fit.get("slope_above"),
             "temp_r_squared": temp_fit.get("r_squared"),
