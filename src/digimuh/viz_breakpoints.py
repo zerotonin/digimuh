@@ -599,9 +599,14 @@ def plot_examples(
         n = len(selected)
         ncols = min(5, n) if n > 3 else n
         nrows = int(np.ceil(n / ncols))
+        # In top-N mode the panels show the same predictor across many
+        # cows, so identical axis ranges make per-cow contrasts visible
+        # at a glance.  Scenario mode (A/B/C) covers different fit
+        # outcomes on the same predictor, so shared axes also aid
+        # comparison.
         fig, axes = plt.subplots(nrows, ncols,
                                  figsize=(5.0 * ncols, 4.2 * nrows),
-                                 squeeze=False)
+                                 squeeze=False, sharex=True, sharey=True)
         axes_flat = axes.flatten()
 
         for ax, (label, animal_row, subtitle) in zip(axes_flat, selected):
