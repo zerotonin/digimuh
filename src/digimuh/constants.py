@@ -82,14 +82,41 @@ MIN_COHORT_SIZE = 10
 # ─────────────────────────────────────────────────────────────────
 
 RCPARAMS = {
-    "svg.fonttype":   "none",
-    "font.family":    "sans-serif",
-    "font.size":      11,
-    "axes.titlesize": 13,
-    "axes.labelsize": 12,
-    "figure.dpi":     150,
-    "savefig.dpi":    300,
-    "savefig.bbox":   "tight",
+    # Editable text in vector exports — text survives the SVG/PDF
+    # round-trip into Adobe Illustrator as real characters rather
+    # than vector paths.  This is the strongest constraint the
+    # Frontiers production team requires, and we honour it ahead of
+    # font-family fidelity per author instruction.
+    "svg.fonttype":   "none",   # SVG <text> elements (editable)
+    "pdf.fonttype":    42,       # TrueType in PDF (editable in Illustrator)
+    "ps.fonttype":     42,       # TrueType in EPS
+    # Font family: Arial first per Frontiers production guidelines,
+    # falling back to Liberation Sans (metrically identical to Arial)
+    # on rendering machines without Arial installed.  The recorded
+    # family name in the SVG is the first one matplotlib resolves;
+    # the SVG opens with Arial in Illustrator on any Adobe-licensed
+    # workstation regardless of which font matplotlib used at render.
+    "font.family":     ["Arial", "Liberation Sans", "DejaVu Sans",
+                        "sans-serif"],
+    # Font sizes per Frontiers guideline (≥ 7-8 pt at final print
+    # size; single-column max width 8.5 cm, double-column 17.8 cm,
+    # absolute max 20 cm).
+    "font.size":         8,    # default text on figures
+    "axes.titlesize":    9,    # subplot titles
+    "axes.labelsize":    8,    # axis labels
+    "xtick.labelsize":   7,
+    "ytick.labelsize":   7,
+    "legend.fontsize":   7,
+    "figure.titlesize":  10,   # suptitle
+    # Resolution: Frontiers raster minimum is 300 DPI.  Even though
+    # we export SVG/PNG (the user finalises layout in Illustrator),
+    # the PNG previews must already meet the production threshold.
+    "figure.dpi":      150,    # screen preview
+    "savefig.dpi":     300,    # production-grade rasters
+    "savefig.bbox":    "tight",
+    "savefig.facecolor": "white",
+    "savefig.edgecolor": "white",
+    "savefig.transparent": False,
 }
 
 MPL_STYLE = "seaborn-v0_8-whitegrid"
