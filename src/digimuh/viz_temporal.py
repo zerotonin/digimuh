@@ -290,7 +290,12 @@ def _plot_circadian_stacked(
 # ─────────────────────────────────────────────────────────────
 
 def plot_thi_daily_profile(out_dir: Path) -> None:
-    """Plot barn THI across 24h by month, with herd breakpoint line."""
+    """Plot barn THI and barn temperature across 24h by month.
+
+    Two stacked panels per year (top: barn temperature, bottom:
+    THI), so the reader can compare the two heat-load axes
+    side by side.  Months coloured consistently across panels.
+    """
     import matplotlib.pyplot as plt
     setup_figure()
 
@@ -303,82 +308,92 @@ def plot_thi_daily_profile(out_dir: Path) -> None:
     if df.empty:
         return
 
-    log.info("  Plotting THI daily profile …")
+    log.info("  Plotting THI + barn-temp daily profile …")
 
-    herd_bp = df["herd_median_bp"].iloc[0] if "herd_median_bp" in df.columns else np.nan
+    herd_bp_thi  = (df["herd_median_bp"].iloc[0]
+                    if "herd_median_bp" in df.columns else np.nan)
+    herd_bp_temp = (df["herd_median_temp_bp"].iloc[0]
+                    if "herd_median_temp_bp" in df.columns else np.nan)
 
-    # One plot per year
+    month_colours = {6: "#009E73", 7: "#E69F00", 8: "#D55E00", 9: "#CC79A7"}
+    month_names   = {6: "June",    7: "July",    8: "August",  9: "September"}
+
+    metric_specs = [
+        ("temp_mean", "temp_q25", "temp_q75", "Barn temperature (°C)",
+         herd_bp_temp, "Herd median barn-temp breakpoint"),
+        ("thi_mean",  "thi_q25",  "thi_q75",  "Barn THI",
+         herd_bp_thi, "Herd median THI breakpoint"),
+    ]
+
     years = sorted(df["year"].unique().astype(int))
 
+    def _draw_panel(ax, sub, mean_col, q25_col, q75_col, ylabel,
+                    herd_bp, bp_label, *, show_legend=True):
+        for month in sorted(sub["month"].unique().astype(int)):
+            msub = sub[sub["month"] == month]
+            if msub.empty:
+                continue
+            colour = month_colours.get(month, "#888")
+            ax.fill_between(msub["hour"], msub[q25_col], msub[q75_col],
+                            alpha=0.10, color=colour)
+            ax.plot(msub["hour"], msub[mean_col], color=colour, linewidth=2,
+                    marker="o", markersize=3,
+                    label=month_names.get(month, str(month)))
+        if not np.isnan(herd_bp):
+            ax.axhline(herd_bp, color="#333", linewidth=1.5, linestyle="--",
+                       label=f"{bp_label} ({herd_bp:.1f})")
+        for start, end in [(4, 7), (16, 19)]:
+            ax.axvspan(start, end, alpha=0.08, color="#999", zorder=0)
+        ax.set_ylabel(ylabel)
+        ax.set_xticks(range(0, 24, 2))
+        ax.set_xlim(-0.5, 23.5)
+        if show_legend:
+            ax.legend(fontsize=7, loc="best")
+
+    # ── Per-year: 2-row figure (barn temp on top, THI below) ──
     for year in years:
         ydf = df[df["year"] == year]
         if ydf.empty:
             continue
-
-        fig, ax = plt.subplots(figsize=(10, 6))
-
-        month_colours = {6: "#009E73", 7: "#E69F00", 8: "#D55E00", 9: "#CC79A7"}
-        month_names = {6: "June", 7: "July", 8: "August", 9: "September"}
-
-        for month in sorted(ydf["month"].unique().astype(int)):
-            msub = ydf[ydf["month"] == month]
-            if msub.empty:
-                continue
-
-            colour = month_colours.get(month, "#888")
-            ax.fill_between(msub["hour"], msub["thi_q25"], msub["thi_q75"],
-                           alpha=0.1, color=colour)
-            ax.plot(msub["hour"], msub["thi_mean"], color=colour, linewidth=2,
-                    marker="o", markersize=3,
-                    label=f"{month_names.get(month, str(month))}")
-
-        # Herd median breakpoint
-        if not np.isnan(herd_bp):
-            ax.axhline(herd_bp, color="#333", linewidth=1.5, linestyle="--",
-                       label=f"Herd median THI breakpoint ({herd_bp:.1f})")
-
-        # Mark milking windows
-        for start, end in [(4, 7), (16, 19)]:
-            ax.axvspan(start, end, alpha=0.08, color="#999", zorder=0)
-
-        ax.set_xlabel("Hour of day")
-        ax.set_ylabel("Barn THI")
-        ax.set_title(f"Barn THI daily profile ({year})\n"
-                     f"(lines = mean, shading = IQR)")
-        ax.set_xticks(range(0, 24, 2))
-        ax.set_xlim(-0.5, 23.5)
-        ax.legend(fontsize=9)
-        fig.tight_layout()
+        fig, axes = plt.subplots(2, 1, figsize=(7.87, 6.5),
+                                 sharex=True)
+        for ax, (mean_c, q25_c, q75_c, ylabel,
+                  herd_bp, bp_label) in zip(axes, metric_specs):
+            _draw_panel(ax, ydf, mean_c, q25_c, q75_c, ylabel,
+                        herd_bp, bp_label, show_legend=(ax is axes[0]))
+        axes[-1].set_xlabel("Hour of day")
+        fig.suptitle(f"Barn climate daily profile ({year})  "
+                     f"— lines = mean, shading = IQR",
+                     fontsize=10, y=0.995)
+        fig.tight_layout(rect=(0, 0, 1, 0.97))
         save_figure(fig, f"thi_daily_profile_{year}", out_dir)
 
-    # All years combined
-    fig, ax = plt.subplots(figsize=(12, 6))
-    labels_seen = set()
-    for ml in sorted(df["month_label"].unique()):
-        msub = df[df["month_label"] == ml]
-        month = int(msub["month"].iloc[0])
-        year = int(msub["year"].iloc[0])
-        colour = month_colours.get(month, "#888")
-        # Vary line style by year
-        ls = ["-", "--", ":", "-."][years.index(year) % 4]
-        ax.plot(msub["hour"], msub["thi_mean"], color=colour, linewidth=1.5,
-                linestyle=ls, alpha=0.7, label=ml)
-
-    if not np.isnan(herd_bp):
-        ax.axhline(herd_bp, color="#333", linewidth=1.5, linestyle="--",
-                   label=f"Herd breakpoint ({herd_bp:.1f})")
-
-    for start, end in [(4, 7), (16, 19)]:
-        ax.axvspan(start, end, alpha=0.08, color="#999", zorder=0)
-
-    ax.set_xlabel("Hour of day")
-    ax.set_ylabel("Barn THI")
-    ax.set_title("Barn THI daily profile — all years\n"
-                 "(when does heat stress occur?)")
-    ax.set_xticks(range(0, 24, 2))
-    ax.set_xlim(-0.5, 23.5)
-    ax.legend(fontsize=7, ncol=2)
-    fig.tight_layout()
+    # ── All years combined: 2-row figure, line style encodes year ──
+    fig, axes = plt.subplots(2, 1, figsize=(7.87, 6.5), sharex=True)
+    for ax, (mean_c, q25_c, q75_c, ylabel,
+              herd_bp, bp_label) in zip(axes, metric_specs):
+        for ml in sorted(df["month_label"].unique()):
+            msub = df[df["month_label"] == ml]
+            month = int(msub["month"].iloc[0])
+            year  = int(msub["year"].iloc[0])
+            colour = month_colours.get(month, "#888")
+            ls = ["-", "--", ":", "-."][years.index(year) % 4]
+            ax.plot(msub["hour"], msub[mean_c], color=colour, linewidth=1.5,
+                    linestyle=ls, alpha=0.7, label=ml)
+        if not np.isnan(herd_bp):
+            ax.axhline(herd_bp, color="#333", linewidth=1.5, linestyle="--",
+                       label=f"{bp_label} ({herd_bp:.1f})")
+        for start, end in [(4, 7), (16, 19)]:
+            ax.axvspan(start, end, alpha=0.08, color="#999", zorder=0)
+        ax.set_ylabel(ylabel)
+        ax.set_xticks(range(0, 24, 2))
+        ax.set_xlim(-0.5, 23.5)
+    axes[0].legend(fontsize=6, ncol=4, loc="best")
+    axes[-1].set_xlabel("Hour of day")
+    fig.suptitle("Barn climate daily profile — all years  "
+                 "(when does heat stress occur?)",
+                 fontsize=10, y=0.995)
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
     save_figure(fig, "thi_daily_profile_all", out_dir)
 
 
