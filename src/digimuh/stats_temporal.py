@@ -241,6 +241,11 @@ def compute_thi_daily_profile(
     thi_conv = bs_results[bs_results["thi_converged"] == True]
     herd_median_bp = thi_conv["thi_breakpoint"].median() if not thi_conv.empty else np.nan
 
+    # Herd median barn-temperature breakpoint (separate predictor).
+    temp_conv = bs_results[bs_results["temp_converged"] == True]
+    herd_median_temp_bp = (temp_conv["temp_breakpoint"].median()
+                            if not temp_conv.empty else np.nan)
+
     records = []
     for (year, month), grp in rumen.groupby(["year", "month"]):
         if int(month) not in month_names:
@@ -251,12 +256,17 @@ def compute_thi_daily_profile(
                 "month": int(month),
                 "month_label": f"{month_names[int(month)]} {int(year)}",
                 "hour": int(hour),
-                "thi_mean": hdata["barn_thi"].mean(),
-                "thi_std": hdata["barn_thi"].std(),
-                "thi_q25": hdata["barn_thi"].quantile(0.25),
-                "thi_q75": hdata["barn_thi"].quantile(0.75),
+                "thi_mean":  hdata["barn_thi"].mean(),
+                "thi_std":   hdata["barn_thi"].std(),
+                "thi_q25":   hdata["barn_thi"].quantile(0.25),
+                "thi_q75":   hdata["barn_thi"].quantile(0.75),
+                "temp_mean": hdata["barn_temp"].mean(),
+                "temp_std":  hdata["barn_temp"].std(),
+                "temp_q25":  hdata["barn_temp"].quantile(0.25),
+                "temp_q75":  hdata["barn_temp"].quantile(0.75),
                 "n_readings": len(hdata),
                 "herd_median_bp": herd_median_bp,
+                "herd_median_temp_bp": herd_median_temp_bp,
             })
 
     return pd.DataFrame(records)
