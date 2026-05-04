@@ -148,26 +148,51 @@ def plot_grouped_boxplots(bs: pd.DataFrame, out_dir: Path) -> None:
 def plot_paired_below_above(
     beh: pd.DataFrame, tests: pd.DataFrame, out_dir: Path,
 ) -> None:
-    """Paired boxplots: below vs above breakpoint with significance brackets."""
+    """Paired boxplots: below vs above breakpoint with significance brackets.
+
+    Y-axes are unified across all years (and across panels of the same
+    response variable) so per-year figures are directly comparable when
+    laid out side by side: the body-temperature panel uses the same
+    [min, max] in 2021, 2022, 2023, 2024, and the respiration panel
+    uses its own shared range.  The shared limits also re-anchor the
+    significance brackets so they sit just below the top of every
+    panel rather than tracking each year's local data range.
+    """
     import matplotlib.pyplot as plt
     from scipy.stats import wilcoxon
     setup_figure()
 
     years = sorted(beh["year"].dropna().unique().astype(int))
 
+    # ── Pre-pass: compute global y-range per response variable ──
+    panel_specs = [
+        ("body_temp_below", "body_temp_above", "Rumen temperature (°C)",
+         "body_temp below vs above"),
+    ]
+    if beh.get("resp_below") is not None and beh["resp_below"].notna().sum() >= 5:
+        panel_specs.append(
+            ("resp_below", "resp_above", "Respiration rate (bpm)",
+             "respiration below vs above"))
+
+    def _global_lim(below_col: str, above_col: str) -> tuple[float, float] | None:
+        all_vals = pd.concat(
+            [beh[below_col].dropna(), beh[above_col].dropna()])
+        if all_vals.empty:
+            return None
+        lo, hi = float(all_vals.min()), float(all_vals.max())
+        pad = 0.04 * (hi - lo) if hi > lo else 0.5
+        # Headroom above for the significance bracket (~10 % of range).
+        return lo - pad, hi + 0.12 * (hi - lo) + pad
+
+    ylims = {below: _global_lim(below, above)
+             for below, above, *_ in panel_specs}
+
     for year in years:
         yr = beh[beh["year"] == year]
 
-        panels = [
-            ("body_temp_below", "body_temp_above", "Rumen temperature (°C)",
-             "body_temp below vs above"),
-        ]
-        # Add respiration if data exists
-        if yr["resp_below"].notna().sum() >= 5:
-            panels.append(
-                ("resp_below", "resp_above", "Respiration rate (bpm)",
-                 "respiration below vs above"),
-            )
+        # Reuse the globally-computed panel set so y-limits are
+        # consistent across years.
+        panels = panel_specs
 
         fig, axes = plt.subplots(1, len(panels), figsize=(5 * len(panels), 6))
         if len(panels) == 1:
@@ -219,7 +244,17 @@ def plot_paired_below_above(
                     stars = ""
                     p_adj = np.nan
 
-            if stars:
+            # Shared y-axis across years so per-year figures are directly
+            # comparable; the significance bracket is anchored just
+            # below the global ymax so it sits in the same screen
+            # location in every panel of the same response variable.
+            lim = ylims.get(below_col)
+            if lim is not None:
+                ax.set_ylim(*lim)
+                if stars:
+                    bracket_y = lim[1] - 0.06 * (lim[1] - lim[0])
+                    add_significance_bracket(ax, 0, 1, bracket_y, stars)
+            elif stars:
                 ymax = max(below_vals.max(), above_vals.max())
                 add_significance_bracket(ax, 0, 1, ymax * 1.02, stars)
 
