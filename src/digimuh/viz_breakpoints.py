@@ -32,7 +32,9 @@ def plot_grouped_boxplots(bs: pd.DataFrame, out_dir: Path) -> None:
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
     from scipy.stats import wilcoxon
-    from digimuh.stats_core import benjamini_hochberg, p_to_stars
+    from rerandomstats import correct_pvalues_array
+
+    from digimuh.stats_core import p_to_stars
     setup_figure()
 
     years = sorted(bs["year"].dropna().unique().astype(int))
@@ -116,7 +118,7 @@ def plot_grouped_boxplots(bs: pd.DataFrame, out_dir: Path) -> None:
 
         # BH-FDR correction across years, draw brackets
         if raw_ps:
-            adj_ps = benjamini_hochberg(np.array(raw_ps))
+            adj_ps = correct_pvalues_array(np.array(raw_ps), method="fdr_bh")
             yrange = ax.get_ylim()[1] - ax.get_ylim()[0]
             bracket_base = ax.get_ylim()[1] + yrange * 0.02
 
@@ -527,9 +529,9 @@ def plot_examples(
             Defaults to all four.
     """
     import matplotlib.pyplot as plt
-    from digimuh.fitting import broken_stick_fit
+    from rerandomstats import broken_stick_fit
     if show_hill:
-        from digimuh.fitting import hill_fit
+        from rerandomstats import hill_fit
     setup_figure()
 
     configs = [
