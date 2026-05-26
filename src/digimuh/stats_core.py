@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║  DigiMuh — stats_core                                           ║
-# ║  « FDR correction, broken-stick fits, correlations, tests »    ║
+# ║  DigiMuh — stats_core                                            ║
+# ║  « broken-stick fits, correlations, below/above tests »          ║
 # ╠══════════════════════════════════════════════════════════════════╣
-# ║  Core statistical pipeline: run broken-stick fits across all    ║
-# ║  animals, compute Spearman correlations, below/above bp means, ║
-# ║  and Wilcoxon tests with BH-FDR correction.                    ║
+# ║  Core statistical orchestration: per-animal broken-stick /       ║
+# ║  Davies / pscore / Hill fits, Spearman correlations, below /     ║
+# ║  above-breakpoint means, and Fisher resampling tests with        ║
+# ║  BH-FDR correction.  The four fitters and the FDR routine        ║
+# ║  themselves live in reRandomStats (>= 0.2.0); this module        ║
+# ║  contains only the DigiMuh-specific wiring.                      ║
 # ╚══════════════════════════════════════════════════════════════════╝
 """Core statistical functions for the broken-stick analysis pipeline."""
 
@@ -17,45 +20,17 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 
-from digimuh.constants import THI_RANGE, TEMP_RANGE, MIN_READINGS
-from digimuh.fitting import broken_stick_fit, davies_test, pscore_test, hill_fit
+from rerandomstats import (
+    broken_stick_fit,
+    correct_pvalues_array,
+    davies_test,
+    hill_fit,
+    pscore_test,
+)
+
+from digimuh.constants import MIN_READINGS, TEMP_RANGE, THI_RANGE
 
 log = logging.getLogger("digimuh.stats")
-
-def benjamini_hochberg(p_values: np.ndarray, alpha: float = 0.05) -> np.ndarray:
-    """Benjamini-Hochberg FDR correction.
-
-    Args:
-        p_values: Array of raw p-values.
-        alpha: Target FDR level (for reference; returns adjusted p).
-
-    Returns:
-        Array of BH-adjusted p-values.
-    """
-    p = np.asarray(p_values, dtype=float)
-    n = len(p)
-    if n == 0:
-        return p
-
-    # Handle NaNs
-    notnan = ~np.isnan(p)
-    p_valid = p[notnan]
-    m = len(p_valid)
-    if m == 0:
-        return p
-
-    order = np.argsort(p_valid)
-    ranked = np.empty(m)
-    ranked[order] = np.arange(1, m + 1)
-
-    adjusted = p_valid * m / ranked
-    # Enforce monotonicity (step-down)
-    adjusted[order] = np.minimum.accumulate(adjusted[order[::-1]])[::-1]
-    adjusted = np.clip(adjusted, 0, 1)
-
-    result = np.full(n, np.nan)
-    result[notnan] = adjusted
-    return result
 
 
 def p_to_stars(p: float) -> str:
@@ -144,7 +119,7 @@ def run_broken_stick_fits(
             temp_hill = hill_fit(
                 grp["barn_temp"].values, grp["body_temp"].values, x_range=(5, 35))
         else:
-            _empty_test = {"p_value": np.nan}
+            _empty_test = {"pvalue": np.nan}
             thi_davies = thi_pscore = temp_davies = temp_pscore = _empty_test
             _empty_hill = {"ec50": np.nan, "hill_n": np.nan,
                            "lower_bend": np.nan, "r_squared": np.nan,
@@ -185,7 +160,7 @@ def run_broken_stick_fits(
                     resp_grp["barn_temp"].values, resp_grp["resp_rate"].values,
                     x_range=(5, 35))
             else:
-                _empty_test = {"p_value": np.nan}
+                _empty_test = {"pvalue": np.nan}
                 resp_thi_davies = resp_thi_pscore = _empty_test
                 resp_temp_davies = resp_temp_pscore = _empty_test
                 _empty_hill = {"ec50": np.nan, "hill_n": np.nan,
@@ -195,7 +170,7 @@ def run_broken_stick_fits(
         else:
             resp_thi_fit = {"breakpoint": np.nan, "converged": False, "n": 0}
             resp_temp_fit = {"breakpoint": np.nan, "converged": False, "n": 0}
-            _empty_test = {"p_value": np.nan}
+            _empty_test = {"pvalue": np.nan}
             resp_thi_davies = resp_thi_pscore = _empty_test
             resp_temp_davies = resp_temp_pscore = _empty_test
             _empty_hill = {"ec50": np.nan, "hill_n": np.nan,
@@ -217,8 +192,8 @@ def run_broken_stick_fits(
             "thi_slope_above": thi_fit.get("slope_above"),
             "thi_r_squared": thi_fit.get("r_squared"),
             "thi_converged": thi_fit["converged"],
-            "thi_davies_p": thi_davies["p_value"],
-            "thi_pscore_p": thi_pscore["p_value"],
+            "thi_davies_p": thi_davies["pvalue"],
+            "thi_pscore_p": thi_pscore["pvalue"],
             "thi_hill_ec50": thi_hill.get("ec50"),
             "thi_hill_n": thi_hill.get("hill_n"),
             "thi_hill_bend": thi_hill.get("lower_bend"),
@@ -234,8 +209,8 @@ def run_broken_stick_fits(
             "temp_slope_above": temp_fit.get("slope_above"),
             "temp_r_squared": temp_fit.get("r_squared"),
             "temp_converged": temp_fit["converged"],
-            "temp_davies_p": temp_davies["p_value"],
-            "temp_pscore_p": temp_pscore["p_value"],
+            "temp_davies_p": temp_davies["pvalue"],
+            "temp_pscore_p": temp_pscore["pvalue"],
             "temp_hill_ec50": temp_hill.get("ec50"),
             "temp_hill_n": temp_hill.get("hill_n"),
             "temp_hill_bend": temp_hill.get("lower_bend"),
@@ -247,8 +222,8 @@ def run_broken_stick_fits(
             "resp_thi_slope_above": resp_thi_fit.get("slope_above"),
             "resp_thi_r_squared": resp_thi_fit.get("r_squared"),
             "resp_thi_converged": resp_thi_fit.get("converged", False),
-            "resp_thi_davies_p": resp_thi_davies["p_value"],
-            "resp_thi_pscore_p": resp_thi_pscore["p_value"],
+            "resp_thi_davies_p": resp_thi_davies["pvalue"],
+            "resp_thi_pscore_p": resp_thi_pscore["pvalue"],
             "resp_thi_hill_ec50": resp_thi_hill.get("ec50"),
             "resp_thi_hill_n": resp_thi_hill.get("hill_n"),
             "resp_thi_hill_bend": resp_thi_hill.get("lower_bend"),
@@ -258,8 +233,8 @@ def run_broken_stick_fits(
             "resp_temp_breakpoint": resp_temp_fit["breakpoint"],
             "resp_temp_r_squared": resp_temp_fit.get("r_squared"),
             "resp_temp_converged": resp_temp_fit.get("converged", False),
-            "resp_temp_davies_p": resp_temp_davies["p_value"],
-            "resp_temp_pscore_p": resp_temp_pscore["p_value"],
+            "resp_temp_davies_p": resp_temp_davies["pvalue"],
+            "resp_temp_pscore_p": resp_temp_pscore["pvalue"],
             "resp_temp_hill_ec50": resp_temp_hill.get("ec50"),
             "resp_temp_hill_n": resp_temp_hill.get("hill_n"),
             "resp_temp_hill_bend": resp_temp_hill.get("lower_bend"),
@@ -424,10 +399,10 @@ def run_statistical_tests(beh: pd.DataFrame) -> pd.DataFrame:
                     "median_diff": (paired_r["resp_above"] - paired_r["resp_below"]).median(),
                 })
 
-        # BH-FDR within this year
+        # BH-FDR within this year (delegated to rerandomstats — shared core)
         if year_tests:
             raw_ps = np.array([t["p_raw"] for t in year_tests])
-            adj_ps = benjamini_hochberg(raw_ps)
+            adj_ps = correct_pvalues_array(raw_ps, method="fdr_bh")
             for t, adj_p in zip(year_tests, adj_ps):
                 t["p_adj"] = adj_p
                 t["stars"] = p_to_stars(adj_p)
