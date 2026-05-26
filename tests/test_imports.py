@@ -16,7 +16,6 @@ import pytest
     "digimuh.console",
     "digimuh.constants",
     "digimuh.extract",
-    "digimuh.fitting",
     "digimuh.ingest",
     "digimuh.run_frontiers_2026",
     "digimuh.stats_core",
