@@ -1,6 +1,13 @@
 # DigiMuh
-![Tests](https://github.com/zerotonin/digimuh/actions/workflows/tests.yml/badge.svg)
-![Docs](https://github.com/zerotonin/digimuh/actions/workflows/docs.yml/badge.svg)
+
+[![Tests](https://github.com/zerotonin/digimuh/actions/workflows/tests.yml/badge.svg)](https://github.com/zerotonin/digimuh/actions/workflows/tests.yml)
+[![Docs](https://github.com/zerotonin/digimuh/actions/workflows/docs.yml/badge.svg)](https://zerotonin.github.io/digimuh/)
+[![Release](https://github.com/zerotonin/digimuh/actions/workflows/release.yml/badge.svg)](https://github.com/zerotonin/digimuh/releases)
+[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Uses reRandomStats](https://img.shields.io/badge/uses-reRandomStats%20v0.2.0-009E73.svg)](https://doi.org/10.5281/zenodo.20387255)
+
 > **🚧 Repository under construction** — core ingestion pipeline is functional;
 > analysis modules, views, and query helpers are coming next.
 
@@ -180,6 +187,42 @@ definitions that power these analyses.
 
 **Bart R. H. Geurten** — Department of Zoology, University of Otago
 
+## Citation
+
+If you use DigiMuh in your research, please cite both DigiMuh and the
+`reRandomStats` statistics toolkit it consumes for breakpoint detection
+(broken-stick regression, Davies / Pseudo-Score tests, 4-parameter
+Hill fit) and FDR correction.
+
+DigiMuh metadata is in [`CITATION.cff`](CITATION.cff) and on the GitHub
+repo's *Cite this repository* button.
+
+```bibtex
+@software{geurten_digimuh,
+  author = {Geurten, Bart R. H.},
+  title  = {{DigiMuh}: Dairy-cow sensor data ingestion and heat-stress
+            analysis pipeline},
+  year   = {2026},
+  url    = {https://github.com/zerotonin/digimuh},
+  license = {MIT},
+}
+
+@software{geurten_rerandomstats_v020,
+  author  = {Geurten, Bart R. H.},
+  title   = {{reRandomStats}: Re-randomisation Statistics Toolkit},
+  year    = {2026},
+  version = {0.2.0},
+  doi     = {10.5281/zenodo.20387255},
+  url     = {https://github.com/zerotonin/reRandomStats},
+  license = {MIT},
+}
+```
+
+> **Note for Elsevier submissions:** Elsevier Editorial Manager does not
+> parse `@software`; convert to `@misc` at submission time per the lab
+> BibTeX convention.
+
 ## License
 
 MIT
+
