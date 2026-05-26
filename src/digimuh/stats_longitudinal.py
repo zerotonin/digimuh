@@ -16,7 +16,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from scipy.stats import f as f_dist
-from digimuh.stats_core import benjamini_hochberg, p_to_stars
+from rerandomstats import correct_pvalues_array
+
+from digimuh.stats_core import p_to_stars
 
 log = logging.getLogger("digimuh.stats")
 
@@ -527,7 +529,7 @@ def _run_longitudinal_tests(bs: pd.DataFrame, d: Path) -> None:
                 raw_ps.append(p)
 
         if test_rows:
-            adj_ps = benjamini_hochberg(np.array(raw_ps))
+            adj_ps = correct_pvalues_array(np.array(raw_ps), method="fdr_bh")
             for r, adj_p in zip(test_rows, adj_ps):
                 r[5] = adj_p
                 r[6] = stars_styled(p_to_stars(adj_p))
