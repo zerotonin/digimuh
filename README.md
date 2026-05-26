@@ -6,6 +6,7 @@
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20389795.svg)](https://doi.org/10.5281/zenodo.20389795)
 [![Uses reRandomStats](https://img.shields.io/badge/uses-reRandomStats%20v0.2.0-009E73.svg)](https://doi.org/10.5281/zenodo.20387255)
 
 > **🚧 Repository under construction** — core ingestion pipeline is functional;
@@ -195,18 +196,23 @@ definitions that power these analyses.
 If you use DigiMuh in your research, please cite both DigiMuh and the
 `reRandomStats` statistics toolkit it consumes for breakpoint detection
 (broken-stick regression, Davies / Pseudo-Score tests, 4-parameter
-Hill fit) and FDR correction.
+Hill fit) and FDR correction.  The version you used should match the
+DOI you cite; full metadata for DigiMuh is in [`CITATION.cff`](CITATION.cff)
+and on the GitHub repo's *Cite this repository* button.
 
-DigiMuh metadata is in [`CITATION.cff`](CITATION.cff) and on the GitHub
-repo's *Cite this repository* button.
+> Geurten, B. R. H. (2026). *DigiMuh: Dairy-cow sensor data ingestion
+> and heat-stress analysis pipeline* (Version 1.0.0) [Software].
+> Zenodo. https://doi.org/10.5281/zenodo.20389795
 
 ```bibtex
-@software{geurten_digimuh,
-  author = {Geurten, Bart R. H.},
-  title  = {{DigiMuh}: Dairy-cow sensor data ingestion and heat-stress
-            analysis pipeline},
-  year   = {2026},
-  url    = {https://github.com/zerotonin/digimuh},
+@software{geurten_digimuh_v100,
+  author  = {Geurten, Bart R. H.},
+  title   = {{DigiMuh}: Dairy-cow sensor data ingestion and heat-stress
+             analysis pipeline},
+  year    = {2026},
+  version = {1.0.0},
+  doi     = {10.5281/zenodo.20389795},
+  url     = {https://github.com/zerotonin/digimuh},
   license = {MIT},
 }
 
