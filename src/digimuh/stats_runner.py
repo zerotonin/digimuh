@@ -32,12 +32,13 @@ log = logging.getLogger("digimuh.stats")
 #  Imports from library modules (lazy — keeps startup fast)
 # ─────────────────────────────────────────────────────────────────
 
+from rerandomstats import correct_pvalues_array
+
 from digimuh.stats_core import (
-    benjamini_hochberg,
+    compute_below_above,
+    compute_spearman,
     p_to_stars,
     run_broken_stick_fits,
-    compute_spearman,
-    compute_below_above,
     run_statistical_tests,
 )
 from digimuh.stats_temporal import (
@@ -203,7 +204,7 @@ def main() -> None:
         if year_rows:
             # BH-FDR across years
             raw_ps = np.array([r[4] for r in year_rows])
-            adj_ps = benjamini_hochberg(raw_ps)
+            adj_ps = correct_pvalues_array(raw_ps, method="fdr_bh")
             for r, adj_p in zip(year_rows, adj_ps):
                 r[4] = adj_p
                 r[5] = stars_styled(p_to_stars(adj_p))
