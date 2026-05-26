@@ -1,0 +1,54 @@
+cff-version: 1.2.0
+title: "DigiMuh: dairy-cow sensor data ingestion and heat-stress analysis"
+message: "If you use this software, please cite it as below."
+type: software
+version: "0.1.0"
+date-released: "2026-05-26"
+license: MIT
+repository-code: "https://github.com/zerotonin/digimuh"
+url: "https://zerotonin.github.io/digimuh/"
+keywords:
+  - dairy
+  - cattle
+  - precision-livestock-farming
+  - heat-stress
+  - sensor-data
+  - SQLite
+  - smaxtec
+  - HerdePlus
+  - broken-stick-regression
+  - intraclass-correlation
+  - repeatability
+  - thermal-index
+  - Python
+authors:
+  - given-names: "Bart R.H."
+    family-names: Geurten
+    email: bart.geurten@otago.ac.nz
+    orcid: "https://orcid.org/0000-0002-1816-3241"
+    affiliation: "Department of Zoology, University of Otago, Dunedin, New Zealand"
+abstract: >-
+  DigiMuh is a research software pipeline for dairy-cow heat-stress
+  analysis.  It consolidates ~9 GB of heterogeneous sensor data
+  (smaXtec rumen boluses, smaXtec barn climate, HerdePlus milking
+  and MLP analytics, Gouna respiration, BCS, HOBO weather, DWD)
+  into a normalised SQLite database, and provides an analysis suite
+  that derives per-animal heat-stress breakpoints (broken-stick
+  regression with profile-RSS confidence intervals), individual
+  repeatability (ICC(1,1) with stackable lactation / DIM / yield /
+  measurement-error corrections), and downstream behavioural and
+  productive responses.  Statistical methods (broken-stick, Davies
+  and Pseudo-Score breakpoint tests, Hill 4PL, Benjamini-Hochberg
+  FDR) are delegated to the reRandomStats >= 0.2.0 toolkit so that
+  the same algorithmic core is shared across the laboratory's
+  precision-livestock-farming and behavioural-biology projects.
+references:
+  - type: software
+    title: "reRandomStats: Re-randomisation Statistics Toolkit"
+    version: "0.2.0"
+    doi: "10.5281/zenodo.20387255"
+    url: "https://github.com/zerotonin/reRandomStats"
+    authors:
+      - given-names: "Bart R.H."
+        family-names: Geurten
+        orcid: "https://orcid.org/0000-0002-1816-3241"
