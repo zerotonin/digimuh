@@ -49,6 +49,9 @@ conda env create -f environment.yml
 conda activate digimuh
 
 # Option B: pip
+# reRandomStats is not on PyPI — install it from the v0.2.0 git tag first,
+# then the editable install picks it up locally to satisfy the dependency.
+pip install "git+https://github.com/zerotonin/reRandomStats.git@v0.2.0"
 pip install -e ".[dev]"
 ```
 
