@@ -2,7 +2,7 @@ cff-version: 1.2.0
 title: "DigiMuh: dairy-cow sensor data ingestion and heat-stress analysis"
 message: "If you use this software, please cite it as below."
 type: software
-version: "0.1.0"
+version: "1.0.0"
 date-released: "2026-05-26"
 license: MIT
 repository-code: "https://github.com/zerotonin/digimuh"
