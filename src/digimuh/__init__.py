@@ -8,4 +8,4 @@ The package consolidates heterogeneous CSV exports from on-farm
 monitoring systems into a single normalised SQLite database.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"

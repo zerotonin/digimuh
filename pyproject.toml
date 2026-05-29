@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "digimuh"
-version = "1.0.0"
+version = "1.0.1"
 description = "DigiMuh — dairy cow sensor data ingestion and analysis toolkit"
 readme = "README.md"
 license = {text = "MIT"}

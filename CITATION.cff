@@ -2,16 +2,11 @@ cff-version: 1.2.0
 title: "DigiMuh: dairy-cow sensor data ingestion and heat-stress analysis"
 message: "If you use this software, please cite it as below."
 type: software
-version: "1.0.0"
-date-released: "2026-05-26"
-doi: "10.5281/zenodo.20389795"
+version: "1.0.1"
+date-released: "2026-05-29"
 license: MIT
 repository-code: "https://github.com/zerotonin/digimuh"
 url: "https://zerotonin.github.io/digimuh/"
-identifiers:
-  - type: doi
-    value: "10.5281/zenodo.20389795"
-    description: "Zenodo archive of DigiMuh v1.0.0 (Frontiers in Animal Science snapshot)"
 keywords:
   - dairy
   - cattle

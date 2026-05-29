@@ -6,7 +6,6 @@
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20389795.svg)](https://doi.org/10.5281/zenodo.20389795)
 [![Uses reRandomStats](https://img.shields.io/badge/uses-reRandomStats%20v0.2.0-009E73.svg)](https://doi.org/10.5281/zenodo.20387255)
 
 **DigiMuh** consolidates ~8.9 GB of heterogeneous dairy-cow CSV sensor data into
@@ -209,17 +208,16 @@ DOI you cite; full metadata for DigiMuh is in [`CITATION.cff`](CITATION.cff)
 and on the GitHub repo's *Cite this repository* button.
 
 > Geurten, B. R. H. (2026). *DigiMuh: Dairy-cow sensor data ingestion
-> and heat-stress analysis pipeline* (Version 1.0.0) [Software].
-> Zenodo. https://doi.org/10.5281/zenodo.20389795
+> and heat-stress analysis pipeline* (Version 1.0.1) [Software].
+> Zenodo. https://github.com/zerotonin/digimuh
 
 ```bibtex
-@software{geurten_digimuh_v100,
+@software{geurten_digimuh_v101,
   author  = {Geurten, Bart R. H.},
   title   = {{DigiMuh}: Dairy-cow sensor data ingestion and heat-stress
              analysis pipeline},
   year    = {2026},
-  version = {1.0.0},
-  doi     = {10.5281/zenodo.20389795},
+  version = {1.0.1},
   url     = {https://github.com/zerotonin/digimuh},
   license = {MIT},
 }
