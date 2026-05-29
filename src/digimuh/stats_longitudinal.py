@@ -15,8 +15,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy.stats import f as f_dist
 from rerandomstats import correct_pvalues_array
+from scipy.stats import f as f_dist
 
 from digimuh.stats_core import p_to_stars
 
@@ -483,8 +483,9 @@ def make_summary_table(bs: pd.DataFrame) -> pd.DataFrame:
 
 def _run_longitudinal_tests(bs: pd.DataFrame, d: Path) -> None:
     """Fisher resampling tests on longitudinal breakpoints."""
-    from digimuh.console import result_table, kv, stars_styled
     from rerandomstats import FisherResamplingTest
+
+    from digimuh.console import kv, result_table, stars_styled
 
     for bp_col, conv_col, label in [
         ("thi_breakpoint", "thi_converged", "THI"),
@@ -517,8 +518,12 @@ def _run_longitudinal_tests(bs: pd.DataFrame, d: Path) -> None:
                            set(repeat[repeat["year"] == y2]["animal_id"])
                 if len(ids_both) < 5:
                     continue
-                d1 = repeat[(repeat["year"] == y1) & (repeat["animal_id"].isin(ids_both))][bp_col].tolist()
-                d2 = repeat[(repeat["year"] == y2) & (repeat["animal_id"].isin(ids_both))][bp_col].tolist()
+                d1 = repeat[
+                    (repeat["year"] == y1) & (repeat["animal_id"].isin(ids_both))
+                ][bp_col].tolist()
+                d2 = repeat[
+                    (repeat["year"] == y2) & (repeat["animal_id"].isin(ids_both))
+                ][bp_col].tolist()
                 p = FisherResamplingTest(
                     data_a=d1, data_b=d2,
                     func="medianDiff", combination_n=20_000,
@@ -555,7 +560,3 @@ def _run_longitudinal_tests(bs: pd.DataFrame, d: Path) -> None:
 
     # Save longitudinal test results alongside stability
     log.info("  Longitudinal tests complete.")
-
-
-if __name__ == "__main__":
-    main()

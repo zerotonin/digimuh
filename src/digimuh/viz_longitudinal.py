@@ -18,11 +18,10 @@ import numpy as np
 import pandas as pd
 
 from digimuh.constants import (
-    COLOURS, SANKEY_COLOURS, THI_REFERENCE,
-    DELTA_STABLE, DELTA_MODERATE, MIN_COHORT_SIZE,
+    COLOURS,
 )
-from digimuh.viz_base import setup_figure, save_figure
 from digimuh.paths import resolve_input, resolve_output
+from digimuh.viz_base import add_significance_bracket, save_figure, setup_figure
 
 log = logging.getLogger("digimuh.viz")
 
@@ -81,7 +80,7 @@ def plot_longitudinal_breakpoints(bs: pd.DataFrame, out_dir: Path) -> None:
 
         # Boxplot overlay
         data_by_year = [repeat[repeat["year"] == y][bp_col].values for y in years]
-        bp_plot = ax.boxplot(
+        ax.boxplot(
             data_by_year, positions=years, widths=0.5,
             patch_artist=True,
             boxprops=dict(facecolor=COLOURS["below_bp"], alpha=0.5, edgecolor="#333"),
@@ -105,8 +104,12 @@ def plot_longitudinal_breakpoints(bs: pd.DataFrame, out_dir: Path) -> None:
                 ids_both = set(repeat[repeat["year"] == y1]["animal_id"]) & \
                            set(repeat[repeat["year"] == y2]["animal_id"])
                 if len(ids_both) >= 5:
-                    d1 = repeat[(repeat["year"] == y1) & (repeat["animal_id"].isin(ids_both))][bp_col].tolist()
-                    d2 = repeat[(repeat["year"] == y2) & (repeat["animal_id"].isin(ids_both))][bp_col].tolist()
+                    d1 = repeat[
+                        (repeat["year"] == y1) & (repeat["animal_id"].isin(ids_both))
+                    ][bp_col].tolist()
+                    d2 = repeat[
+                        (repeat["year"] == y2) & (repeat["animal_id"].isin(ids_both))
+                    ][bp_col].tolist()
                     p = FisherResamplingTest(data_a=d1, data_b=d2,
                                             func="medianDiff", combination_n=20_000).main()
                     raw_ps_abs.append(p)
@@ -132,7 +135,7 @@ def plot_longitudinal_breakpoints(bs: pd.DataFrame, out_dir: Path) -> None:
                       s=8, color="#888888", alpha=0.3, zorder=2)
 
         data_by_year_rel = [repeat[repeat["year"] == y]["bp_change"].values for y in years]
-        bp_plot = ax.boxplot(
+        ax.boxplot(
             data_by_year_rel, positions=years, widths=0.5,
             patch_artist=True,
             boxprops=dict(facecolor=COLOURS["above_bp"], alpha=0.5, edgecolor="#333"),
@@ -146,6 +149,7 @@ def plot_longitudinal_breakpoints(bs: pd.DataFrame, out_dir: Path) -> None:
         # Significance: test if each year's change differs from 0
         try:
             from rerandomstats import FisherResamplingTest
+
             from digimuh.stats_core import p_to_stars
             anno_lines = []
             for y in years[1:]:  # first year is always 0
@@ -368,7 +372,6 @@ def plot_breakpoint_icc(out_dir: Path,
                edgecolors="white", linewidths=1.2, zorder=5)
 
     # Right-side annotation: n animals / n obs / p
-    x_text = -1.05
     for i, (_, r) in zip(y, df.iterrows()):
         sig = ""
         if pd.notna(r["p"]):
@@ -438,8 +441,8 @@ def plot_longitudinal_sankey(bs: pd.DataFrame, out_dir: Path) -> None:
     Duplicate entries per animal-year (multiple date_enter) are
     resolved by averaging breakpoints before computing deltas.
     """
-    import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
+    import matplotlib.pyplot as plt
     from matplotlib.path import Path as MplPath
     setup_figure()
 

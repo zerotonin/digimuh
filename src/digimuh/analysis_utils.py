@@ -18,10 +18,13 @@ from __future__ import annotations
 import logging
 import sqlite3
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-import numpy as np
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 log = logging.getLogger("digimuh.analysis")
 
