@@ -9,9 +9,6 @@
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20389795.svg)](https://doi.org/10.5281/zenodo.20389795)
 [![Uses reRandomStats](https://img.shields.io/badge/uses-reRandomStats%20v0.2.0-009E73.svg)](https://doi.org/10.5281/zenodo.20387255)
 
-> **🚧 Repository under construction** — core ingestion pipeline is functional;
-> analysis modules, views, and query helpers are coming next.
-
 **DigiMuh** consolidates ~8.9 GB of heterogeneous dairy-cow CSV sensor data into
 a single normalised SQLite database.  The data spans 3.5 years (April 2021 –
 September 2024) of continuous monitoring from multiple on-farm systems:
@@ -111,6 +108,12 @@ DigiMuh-Export_2021-04-01_2024-09-30/
 Animal IDs are 15-digit EU ear tag numbers.  The entity identifier is always
 the first underscore-delimited segment of each filename.
 
+The animal-selection spreadsheet (`--tierauswahl`) is private herd data and is
+**not** shipped with the repository.  A synthetic [`Tierauswahl.example.xlsx`](Tierauswahl.example.xlsx)
+(four fake rows) documents the expected columns — `animal_id`, `datetime_enter`,
+`datetime_exit`, `group`, `Zwischenschritt`, `Auswahl`, `Versuchsjahr`,
+`Kuhnummer` — so you can format your own.
+
 
 ## CLI reference
 
@@ -144,8 +147,13 @@ creates analysis views on first run, queries the database, and writes results
 # Install with analysis dependencies
 pip install -e ".[analysis]"
 
-# 0. Individual heat stress thresholds (broken-stick regression)
-digimuh-broken-stick --db cow.db --tierauswahl Tierauswahl.xlsx --out results/broken_stick
+# 0. Individual heat-stress thresholds (broken-stick regression).
+#    Three discrete stages — extract → stats → plots — sharing a directory:
+digimuh-extract --db cow.db --tierauswahl Tierauswahl.xlsx --out results/broken_stick
+digimuh-stats   --data results/broken_stick
+digimuh-plots   --data results/broken_stick
+#    …or run all three in one shot (the Frontiers 2026 pipeline):
+digimuh-frontiers --data results/broken_stick
 
 # 1. Subclinical ketosis risk — FPR × rumination × milk yield
 digimuh-ketosis --db cow.db --out results/ketosis
@@ -182,9 +190,9 @@ definitions that power these analyses.
 - [x] Analysis: digestive efficiency (motility–pH coupling)
 - [x] Analysis: circadian rhythm disruption index
 - [x] Analysis: motility pattern entropy (novel)
+- [x] Sphinx documentation on GitHub Pages
 - [ ] Data validation and quality-check reports
 - [ ] Parallelised entropy computation for full dataset
-- [ ] Sphinx documentation on GitHub Pages
 
 
 ## Authors
