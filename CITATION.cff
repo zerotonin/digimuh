@@ -4,9 +4,17 @@ message: "If you use this software, please cite it as below."
 type: software
 version: "1.0.1"
 date-released: "2026-05-29"
+doi: "10.5281/zenodo.20389794"
 license: MIT
 repository-code: "https://github.com/zerotonin/digimuh"
 url: "https://zerotonin.github.io/digimuh/"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.20389794"
+    description: "Concept DOI — always resolves to the latest DigiMuh release"
+  - type: doi
+    value: "10.5281/zenodo.20438189"
+    description: "Zenodo archive of DigiMuh v1.0.1"
 keywords:
   - dairy
   - cattle
