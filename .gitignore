@@ -20,3 +20,9 @@ docs/_build/
 *.swo
 *~
 results/*
+
+# Real animal-selection spreadsheets are private input data (collaborator's
+# herd records, EU ear-tag IDs) — never commit them.  The synthetic
+# Tierauswahl.example.xlsx is the only one tracked, to document the schema.
+Tierauswahl*.xlsx
+!Tierauswahl.example.xlsx
