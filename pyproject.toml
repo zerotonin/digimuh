@@ -90,6 +90,13 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 99
 target-version = "py310"
+# _legacy/ is preserved reference code (pre-refactor pipeline); not linted.
+extend-exclude = ["src/digimuh/_legacy"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
+# E712 (== True / == False) is the NaN-safe idiom for pandas boolean masks
+# here: convergence flags (e.g. hill_*_converged) may be NaN or absent, and
+# `df[df[col] == True]` drops NaN rows whereas bare `df[df[col]]` raises
+# "Cannot mask with non-boolean array containing NA".  Kept intentionally.
+ignore = ["E712"]
