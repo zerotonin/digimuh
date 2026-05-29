@@ -28,9 +28,13 @@ import numpy as np
 import pandas as pd
 
 from digimuh.constants import (
-    WONG_BLUE, WONG_VERMILLION, WONG_SKY, WONG_ORANGE, WONG_GREY,
+    WONG_BLUE,
+    WONG_GREY,
+    WONG_ORANGE,
+    WONG_SKY,
+    WONG_VERMILLION,
 )
-from digimuh.viz_base import setup_figure, save_figure
+from digimuh.viz_base import save_figure, setup_figure
 
 log = logging.getLogger("digimuh.viz")
 

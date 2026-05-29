@@ -36,12 +36,15 @@ import numpy as np
 import pandas as pd
 
 from digimuh.constants import (
-    WONG_BLUE, WONG_GREEN, WONG_ORANGE, WONG_VERMILLION, WONG_GREY,
-    WONG_SKY, WONG_PINK,
-    COLOURS,
+    WONG_BLUE,
+    WONG_GREEN,
+    WONG_GREY,
+    WONG_ORANGE,
+    WONG_SKY,
+    WONG_VERMILLION,
 )
-from digimuh.viz_base import setup_figure, save_figure
 from digimuh.paths import resolve_input, resolve_output
+from digimuh.viz_base import save_figure, setup_figure
 
 log = logging.getLogger("digimuh.milk_yield")
 
@@ -116,7 +119,7 @@ def print_summary(df: pd.DataFrame, our_terciles: tuple[float, float]) -> None:
 
     Uses the rich console helpers if available, otherwise plain text.
     """
-    from digimuh.console import section, result_table, kv, banner
+    from digimuh.console import banner, result_table, section
 
     banner("Milk yield classification analysis")
 
@@ -335,7 +338,7 @@ def plot_per_year_histogram(
 
 def print_wood_summary(wood: pd.DataFrame, fits: pd.DataFrame) -> None:
     """Pretty-print Wood-curve coverage, fit stats, and residual terciles."""
-    from digimuh.console import section, result_table, kv, stars_styled
+    from digimuh.console import kv, result_table, section
 
     section("Wood lactation-curve coverage",
             "per-lactation fits with ≥30 points use per_lactation, "
@@ -481,6 +484,7 @@ def plot_wood_example_fits(
             rather than the much smaller summer-window slice.
     """
     import matplotlib.pyplot as plt
+
     from digimuh.stats_lactation_curve import predict_wood
     setup_figure()
 
@@ -490,7 +494,6 @@ def plot_wood_example_fits(
         return
 
     # Pick a spread: best, median, worst (by R²) plus random in between.
-    rng = np.random.default_rng(0)
     indiv = indiv.sort_values("r_squared", ascending=False)
     anchors = indiv.head(3)
     if len(indiv) > 6:
@@ -607,8 +610,10 @@ def main() -> None:
 
     if args.wood:
         from digimuh.stats_lactation_curve import (
-            load_calvings, compute_wood_residuals,
-            load_daily_yields_for_fitting, attach_dim,
+            attach_dim,
+            compute_wood_residuals,
+            load_calvings,
+            load_daily_yields_for_fitting,
         )
         calvings = load_calvings(args.data, db_path=args.db)
         fit_frame = load_daily_yields_for_fitting(args.data)
@@ -667,7 +672,7 @@ def _run_stratified_tnf(
     decline has been removed; the raw variants are retained for
     comparability with literature.
     """
-    from digimuh.console import section, result_table, kv, stars_styled
+    from digimuh.console import kv, result_table, section, stars_styled
     from digimuh.stats_production import (
         classify_cow_years_by_wood_residual,
         compute_tnf_yield_by_class,
@@ -770,12 +775,12 @@ def _run_crossing_and_climate_analyses(
     2. *Does the daily mean climate itself predict yield?* —
        single scatter + OLS fit per climate predictor.
     """
-    from digimuh.console import section, result_table, kv, stars_styled
+    from digimuh.console import result_table, section, stars_styled
     from digimuh.stats_core import p_to_stars
     from digimuh.stats_production import (
-        compute_daily_crossing_flags,
-        attach_daily_climate_means,
         attach_crossing_flags,
+        attach_daily_climate_means,
+        compute_daily_crossing_flags,
         crossing_day_comparison,
         daily_climate_vs_yield_correlations,
     )
@@ -881,15 +886,19 @@ def _run_milk_composition_analysis(
     each climate predictor (pooled and per yield class).  Also
     renders a dilution-focused 2×2 figure and a signed-rs heatmap.
     """
-    from digimuh.console import section, result_table, kv, stars_styled
+    from digimuh.console import kv, result_table, section, stars_styled
     from digimuh.stats_core import p_to_stars
     from digimuh.stats_milk_composition import (
-        load_mlp_test_days, merge_mlp_with_cowday,
-        mlp_climate_correlations, thin_milk_verdict,
-        MLP_RESPONSES, CLIMATE_PREDICTORS,
+        CLIMATE_PREDICTORS,
+        MLP_RESPONSES,
+        load_mlp_test_days,
+        merge_mlp_with_cowday,
+        mlp_climate_correlations,
+        thin_milk_verdict,
     )
     from digimuh.viz_milk_composition import (
-        plot_thin_milk_hypothesis, plot_composition_heatmap,
+        plot_composition_heatmap,
+        plot_thin_milk_hypothesis,
     )
 
     try:
@@ -974,7 +983,8 @@ def _run_milk_composition_analysis(
 
     # ── Dilution partition: pure water vs rumen suppression ─
     from digimuh.stats_milk_composition import (
-        compute_dilution_partition, dilution_partition_summary,
+        compute_dilution_partition,
+        dilution_partition_summary,
     )
     from digimuh.viz_milk_composition import plot_dilution_partition
 

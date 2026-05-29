@@ -23,40 +23,41 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-log = logging.getLogger("digimuh.viz")
-
+from digimuh.paths import resolve_input
 from digimuh.viz_breakpoints import (
+    plot_bodytemp_vs_resp_scatter,
+    plot_climate,
+    plot_examples,
     plot_grouped_boxplots,
     plot_paired_below_above,
     plot_paired_rumen_vs_resp,
-    plot_spearman,
-    plot_climate,
     plot_predictors,
+    plot_spearman,
     plot_stability,
     plot_thi_vs_temp_scatter,
-    plot_bodytemp_vs_resp_scatter,
-    plot_examples,
-)
-from digimuh.viz_temporal import (
-    plot_circadian_null_model,
-    plot_thi_daily_profile,
-    plot_crossing_raster,
 )
 from digimuh.viz_correlation import (
+    plot_climate_eta,
     plot_cross_correlation,
     plot_derivative_ccf,
     plot_event_triggered_average,
-    plot_climate_eta,
 )
-from digimuh.viz_production import plot_tnf_yield
 from digimuh.viz_longitudinal import (
-    plot_longitudinal_breakpoints,
-    plot_breakpoint_raincloud,
     plot_breakpoint_icc,
+    plot_breakpoint_raincloud,
+    plot_longitudinal_breakpoints,
     plot_longitudinal_sankey,
     plot_threshold_sankey,
 )
-from digimuh.paths import resolve_input
+from digimuh.viz_production import plot_tnf_yield
+from digimuh.viz_temporal import (
+    plot_circadian_null_model,
+    plot_crossing_raster,
+    plot_thi_daily_profile,
+)
+
+log = logging.getLogger("digimuh.viz")
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate broken-stick analysis figures")

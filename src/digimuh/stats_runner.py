@@ -17,23 +17,15 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from rerandomstats import correct_pvalues_array
 from scipy.stats import spearmanr
 
-log = logging.getLogger("digimuh.stats")
-
-
-# ─────────────────────────────────────────────────────────────────
-#  Imports from library modules (lazy — keeps startup fast)
-# ─────────────────────────────────────────────────────────────────
-
-from rerandomstats import correct_pvalues_array
-
+from digimuh.paths import resolve_input, resolve_output
 from digimuh.stats_core import (
     compute_below_above,
     compute_spearman,
@@ -41,31 +33,39 @@ from digimuh.stats_core import (
     run_broken_stick_fits,
     run_statistical_tests,
 )
-from digimuh.stats_temporal import (
-    compute_cross_correlation,
-    compute_circadian_null_model,
-    compute_thi_daily_profile,
-    compute_derivative_ccf,
-    compute_event_triggered_average,
-    compute_crossing_times,
-    compute_climate_eta,
+from digimuh.stats_longitudinal import (
+    _run_longitudinal_tests,
+    compute_breakpoint_icc,
+    compute_stability,
+    make_summary_table,
 )
 from digimuh.stats_production import (
     compute_thermoneutral_fraction,
     compute_tnf_yield_analysis,
 )
-from digimuh.stats_longitudinal import (
-    compute_stability,
-    compute_breakpoint_icc,
-    make_summary_table,
-    _run_longitudinal_tests,
+from digimuh.stats_temporal import (
+    compute_circadian_null_model,
+    compute_climate_eta,
+    compute_cross_correlation,
+    compute_crossing_times,
+    compute_derivative_ccf,
+    compute_event_triggered_average,
+    compute_thi_daily_profile,
 )
-from digimuh.paths import resolve_output, resolve_input
+
+log = logging.getLogger("digimuh.stats")
+
 
 def main() -> None:
     from digimuh.console import (
-        setup_logging, banner, section, result_table, kv, stars_styled,
-        progress, done, reset_steps,
+        banner,
+        done,
+        kv,
+        reset_steps,
+        result_table,
+        section,
+        setup_logging,
+        stars_styled,
     )
 
     parser = argparse.ArgumentParser(description="Statistical analysis for broken-stick")
@@ -137,7 +137,10 @@ def main() -> None:
             n_davies = (bs[davies_col] < 0.05).sum() if davies_col in bs.columns else 0
             n_pscore = (bs[pscore_col] < 0.05).sum() if pscore_col in bs.columns else 0
             n_hill = (bs[hill_col] == True).sum() if hill_col in bs.columns else 0
-            n_bend = bs.loc[bs.get(hill_col, pd.Series(dtype=bool)) == True, hill_bend].notna().sum() if hill_col in bs.columns else 0
+            n_bend = (
+                bs.loc[bs.get(hill_col, pd.Series(dtype=bool)) == True, hill_bend].notna().sum()
+                if hill_col in bs.columns else 0
+            )
 
             conv_rows.append([
                 label, len(bs),
@@ -161,7 +164,8 @@ def main() -> None:
             bends = bs.loc[bs[hill_col] == True, hill_bend_col].dropna()
             if len(bends) > 0:
                 kv(f"{label} Hill bend median [IQR]",
-                   f"{bends.median():.1f} [{bends.quantile(0.25):.1f} - {bends.quantile(0.75):.1f}]")
+                   f"{bends.median():.1f} "
+                   f"[{bends.quantile(0.25):.1f} - {bends.quantile(0.75):.1f}]")
 
     # ── 1b. Test breakpoints against literature THI threshold ─
     section("Breakpoint vs literature threshold",
@@ -190,7 +194,9 @@ def main() -> None:
         # Per-year breakdown
         year_rows = []
         for year in sorted(bs["year"].unique().astype(int)):
-            yr_bps = bs[(bs["year"] == year) & (bs["thi_converged"] == True)]["thi_breakpoint"].dropna()
+            yr_bps = bs[
+                (bs["year"] == year) & (bs["thi_converged"] == True)
+            ]["thi_breakpoint"].dropna()
             if len(yr_bps) >= 5:
                 p_yr = FisherResamplingTest(
                     data_a=yr_bps.tolist(),
@@ -269,9 +275,9 @@ def main() -> None:
                 trough_h = hourly["mean"].idxmin()
                 amplitude = hourly["mean"].max() - hourly["mean"].min()
                 kv(f"{day_type.capitalize()} days: n animals", sub["animal_id"].nunique())
-                kv(f"  Amplitude (peak-trough)", f"{amplitude:.3f} °C")
-                kv(f"  Peak hour", f"{peak_h}:00")
-                kv(f"  Trough hour", f"{trough_h}:00")
+                kv("  Amplitude (peak-trough)", f"{amplitude:.3f} °C")
+                kv("  Peak hour", f"{peak_h}:00")
+                kv("  Trough hour", f"{trough_h}:00")
 
     # ── 6. THI daily exceedance profile ──────────────────────
     section("THI daily exceedance",
@@ -305,7 +311,7 @@ def main() -> None:
             if not psub.empty:
                 kv(f"{pred.upper()} crossings",
                    f"{len(psub)} events from {psub['animal_id'].nunique()} animals")
-                kv(f"  Median clock time",
+                kv("  Median clock time",
                    f"{psub['day_fraction'].median():.1f}h "
                    f"[IQR {psub['day_fraction'].quantile(0.25):.1f}–"
                    f"{psub['day_fraction'].quantile(0.75):.1f}h]")
@@ -392,7 +398,7 @@ def main() -> None:
     eta_hour_start = 8
     eta_hour_end = 11
     kv("", "")
-    kv(f"Hour-filtered ETA", f"{eta_hour_start}:00–{eta_hour_end}:00 only")
+    kv("Hour-filtered ETA", f"{eta_hour_start}:00–{eta_hour_end}:00 only")
 
     eta_filt_traces, eta_filt_summary = compute_event_triggered_average(
         rumen, bs, crossing_hour_range=(eta_hour_start, eta_hour_end))
@@ -478,7 +484,7 @@ def main() -> None:
                     if n_bins >= 2:
                         first = sorted(bin_labels.keys())[0]
                         last = sorted(bin_labels.keys())[-1]
-                        bin_labels[first] = f"Q1 (low TNF)"
+                        bin_labels[first] = "Q1 (low TNF)"
                         bin_labels[last] = f"Q{n_bins} (high TNF)"
                     valid["tnf_quartile"] = valid["tnf_quartile"].map(bin_labels)
                 except ValueError:

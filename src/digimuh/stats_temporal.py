@@ -545,7 +545,6 @@ def compute_crossing_times(
             grp = grp.sort_values("timestamp").reset_index(drop=True)
             x = grp[env_col].values
             ts = pd.to_datetime(grp["timestamp"]).values
-            n = len(x)
 
             # Upward crossings — only if consecutive readings < 30 min apart
             below = x[:-1] <= bp

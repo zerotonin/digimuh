@@ -37,7 +37,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from digimuh.analysis_utils import connect_db, query_df, setup_plotting, save_fig
+from digimuh.analysis_utils import connect_db, query_df, save_fig, setup_plotting
 
 log = logging.getLogger("digimuh.digestive")
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from digimuh.constants import RCPARAMS, MPL_STYLE
+from digimuh.constants import MPL_STYLE, RCPARAMS
 
 log = logging.getLogger("digimuh.viz")
 

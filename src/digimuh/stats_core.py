@@ -18,8 +18,6 @@ import logging
 
 import numpy as np
 import pandas as pd
-from scipy.stats import spearmanr
-
 from rerandomstats import (
     broken_stick_fit,
     correct_pvalues_array,
@@ -27,8 +25,7 @@ from rerandomstats import (
     hill_fit,
     pscore_test,
 )
-
-from digimuh.constants import MIN_READINGS, TEMP_RANGE, THI_RANGE
+from scipy.stats import spearmanr
 
 log = logging.getLogger("digimuh.stats")
 
@@ -265,9 +262,15 @@ def compute_spearman(rumen: pd.DataFrame, resp: pd.DataFrame) -> pd.DataFrame:
                 rec[f"{prefix}_rs"] = np.nan
                 rec[f"{prefix}_p"] = np.nan
         # Respiration Spearman
-        resp_grp = resp[(resp["animal_id"] == aid) & (resp["year"] == year)] if not resp.empty else pd.DataFrame()
+        resp_grp = (
+            resp[(resp["animal_id"] == aid) & (resp["year"] == year)]
+            if not resp.empty else pd.DataFrame()
+        )
         for x_col, prefix in [("barn_thi", "resp_thi"), ("barn_temp", "resp_temp")]:
-            sub = resp_grp.dropna(subset=[x_col, "resp_rate"]) if not resp_grp.empty else pd.DataFrame()
+            sub = (
+                resp_grp.dropna(subset=[x_col, "resp_rate"])
+                if not resp_grp.empty else pd.DataFrame()
+            )
             if len(sub) > 20:
                 rs, p = spearmanr(sub[x_col], sub["resp_rate"])
                 rec[f"{prefix}_rs"] = rs
@@ -315,7 +318,10 @@ def compute_below_above(
         }
 
         # Respiration
-        resp_grp = resp[(resp["animal_id"] == aid) & (resp["year"] == year)] if not resp.empty else pd.DataFrame()
+        resp_grp = (
+            resp[(resp["animal_id"] == aid) & (resp["year"] == year)]
+            if not resp.empty else pd.DataFrame()
+        )
         if len(resp_grp) >= 20:
             rb = resp_grp[resp_grp["barn_thi"] <= bp]
             ra = resp_grp[resp_grp["barn_thi"] > bp]

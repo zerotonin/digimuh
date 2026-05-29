@@ -17,8 +17,8 @@ import numpy as np
 import pandas as pd
 
 from digimuh.constants import COLOURS
-from digimuh.viz_base import setup_figure, save_figure
 from digimuh.paths import resolve_input
+from digimuh.viz_base import save_figure, setup_figure
 
 log = logging.getLogger("digimuh.viz")
 
@@ -339,7 +339,7 @@ def plot_crossing_day_raincloud(
         "yield_residual":  "DIM-adjusted yield residual (kg/d)",
     }.get(response, response)
 
-    from digimuh.constants import WONG_VERMILLION, WONG_BLUE, WONG_GREY
+    from digimuh.constants import WONG_BLUE, WONG_GREY, WONG_VERMILLION
 
     fig, (ax_thi, ax_temp) = plt.subplots(1, 2, figsize=(12, 6),
                                            sharey=True)
@@ -421,7 +421,8 @@ def plot_daily_climate_vs_yield(
     console agree.
     """
     import matplotlib.pyplot as plt
-    from digimuh.constants import WONG_SKY, WONG_VERMILLION, WONG_GREY
+
+    from digimuh.constants import WONG_GREY, WONG_SKY, WONG_VERMILLION
     setup_figure()
 
     if df.empty or response not in df.columns:

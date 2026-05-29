@@ -43,7 +43,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from digimuh.analysis_utils import connect_db, query_df, setup_plotting, save_fig
+from digimuh.analysis_utils import connect_db, query_df, save_fig, setup_plotting
 
 log = logging.getLogger("digimuh.entropy")
 
@@ -152,7 +152,8 @@ def permutation_entropy(
     H = -np.sum(probs * np.log(probs))
 
     if normalize:
-        from math import factorial, log as mathlog
+        from math import factorial
+        from math import log as mathlog
         H_max = mathlog(factorial(order))
         H = H / H_max if H_max > 0 else np.nan
 

@@ -31,7 +31,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 SUBDIRS: dict[str, str] = {
     "extract":      "01_extract",
     "breakpoints":  "02_breakpoints",

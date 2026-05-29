@@ -13,15 +13,16 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from digimuh.stats_production import (
+    compute_thermoneutral_fraction,
+)
 from digimuh.stats_temporal import (
     compute_circadian_null_model,
     compute_climate_eta,
     compute_crossing_times,
     compute_thi_daily_profile,
 )
-from digimuh.stats_production import (
-    compute_thermoneutral_fraction,
-)
+
 # ─────────────────────────────────────────────────────────────
 #  fixtures
 # ─────────────────────────────────────────────────────────────
@@ -147,12 +148,8 @@ def test_crossing_times_no_milking_gaps(synthetic_rumen, synthetic_bs):
     if ct.empty:
         pytest.skip("No crossings in synthetic data")
     # The milking-gap filter removes crossings where consecutive
-    # readings are > 30 min apart.  In our synthetic data with
-    # milking gaps at 4-6 and 16-18, crossings at those boundaries
-    # should be filtered out.
-    milking_hours = ct[ct["clock_hour"].isin([3, 15])]
-    # Not a strict assertion because the filter is on dt, not clock hour
-    # Just verify the function runs without error
+    # readings are > 30 min apart.  The filter is on dt, not clock hour,
+    # so this is not a strict assertion — just verify the function runs.
     assert isinstance(ct, pd.DataFrame)
 
 

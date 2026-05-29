@@ -18,8 +18,8 @@ import numpy as np
 import pandas as pd
 
 from digimuh.constants import COLOURS
-from digimuh.viz_base import setup_figure, save_figure
 from digimuh.paths import resolve_input
+from digimuh.viz_base import save_figure, setup_figure
 
 log = logging.getLogger("digimuh.viz")
 
@@ -75,7 +75,10 @@ def plot_cross_correlation(out_dir: Path) -> None:
 
     # Detect whether we have the variant column (raw vs detrended)
     has_variants = "variant" in xcorr.columns
-    variants = [("raw", ""), ("detrended", " (diurnal removed)")] if has_variants else [("raw", "")]
+    variants = (
+        [("raw", ""), ("detrended", " (diurnal removed)")]
+        if has_variants else [("raw", "")]
+    )
 
     for variant, variant_subtitle in variants:
         vdata = xcorr[xcorr["variant"] == variant] if has_variants else xcorr

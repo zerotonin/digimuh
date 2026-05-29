@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 from digimuh.constants import COLOURS
-from digimuh.viz_base import setup_figure, save_figure, add_significance_bracket
+from digimuh.viz_base import add_significance_bracket, save_figure, setup_figure
 
 log = logging.getLogger("digimuh.viz")
 
@@ -31,8 +31,8 @@ def plot_grouped_boxplots(bs: pd.DataFrame, out_dir: Path) -> None:
     with within-year Wilcoxon signed-rank tests (BH-FDR corrected)."""
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
-    from scipy.stats import wilcoxon
     from rerandomstats import correct_pvalues_array
+    from scipy.stats import wilcoxon
 
     from digimuh.stats_core import p_to_stars
     setup_figure()
@@ -57,7 +57,7 @@ def plot_grouped_boxplots(bs: pd.DataFrame, out_dir: Path) -> None:
         data_r = [rumen_conv[rumen_conv["year"] == y][rumen_col].dropna().values for y in years]
         data_resp = [resp_conv[resp_conv["year"] == y][resp_col].dropna().values for y in years]
 
-        bp1 = ax.boxplot(
+        ax.boxplot(
             data_r, positions=x_pos - width / 2, widths=width,
             patch_artist=True,
             boxprops=dict(facecolor=COLOURS["below_bp"], alpha=0.6, edgecolor="#333"),
@@ -66,7 +66,7 @@ def plot_grouped_boxplots(bs: pd.DataFrame, out_dir: Path) -> None:
         )
         has_resp = any(len(d) > 0 for d in data_resp)
         if has_resp:
-            bp2 = ax.boxplot(
+            ax.boxplot(
                 data_resp, positions=x_pos + width / 2, widths=width,
                 patch_artist=True,
                 boxprops=dict(facecolor=COLOURS["above_bp"], alpha=0.6, edgecolor="#333"),
@@ -235,16 +235,18 @@ def plot_paired_below_above(
             ]
             if not test_row.empty:
                 stars = test_row.iloc[0]["stars"]
-                p_adj = test_row.iloc[0]["p_adj"]
             else:
                 # Compute on the fly if not in tests
                 try:
                     _, p_raw = wilcoxon(below_vals, above_vals)
-                    stars = "***" if p_raw < 0.001 else "**" if p_raw < 0.01 else "*" if p_raw < 0.05 else "n.s."
-                    p_adj = p_raw
+                    stars = (
+                        "***" if p_raw < 0.001
+                        else "**" if p_raw < 0.01
+                        else "*" if p_raw < 0.05
+                        else "n.s."
+                    )
                 except Exception:
                     stars = ""
-                    p_adj = np.nan
 
             # Shared y-axis across years so per-year figures are directly
             # comparable; the significance bracket is anchored just

@@ -17,8 +17,8 @@ import numpy as np
 import pandas as pd
 
 from digimuh.constants import COLOURS
-from digimuh.viz_base import setup_figure, save_figure
 from digimuh.paths import resolve_input
+from digimuh.viz_base import save_figure, setup_figure
 
 log = logging.getLogger("digimuh.viz")
 
@@ -412,7 +412,6 @@ def plot_crossing_raster(out_dir: Path) -> None:
     boxplot of crossing clock times.
     """
     import matplotlib.pyplot as plt
-    from matplotlib.collections import PathCollection
     setup_figure()
 
     path = resolve_input(out_dir, "crossing_times.csv")
@@ -490,7 +489,7 @@ def plot_crossing_raster(out_dir: Path) -> None:
                    color=COLOURS["below_bp"], edgecolors="none")
 
         # Boxplot
-        bp_plot = ax.boxplot(
+        ax.boxplot(
             vals, positions=[0.85], widths=0.12,
             vert=True, patch_artist=True,
             boxprops=dict(facecolor=COLOURS["below_bp"], alpha=0.5, edgecolor="#333"),

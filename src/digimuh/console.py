@@ -35,12 +35,16 @@ try:
     from rich.logging import RichHandler
     from rich.panel import Panel
     from rich.progress import (
-        Progress, SpinnerColumn, BarColumn, TextColumn,
-        TimeElapsedColumn, TimeRemainingColumn, MofNCompleteColumn,
+        BarColumn,
+        MofNCompleteColumn,
+        Progress,
+        SpinnerColumn,
+        TextColumn,
+        TimeElapsedColumn,
+        TimeRemainingColumn,
     )
     from rich.table import Table
     from rich.theme import Theme
-    from rich.tree import Tree
     HAS_RICH = True
 except ImportError:
     HAS_RICH = False
