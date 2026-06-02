@@ -297,6 +297,116 @@ def plot_breakpoint_raincloud(out_dir: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────
+#  « breakpoint value raincloud per year »
+# ─────────────────────────────────────────────────────────────
+
+def plot_breakpoint_value_raincloud(bs: pd.DataFrame, out_dir: Path) -> None:
+    """Raincloud plots of the individual breakpoint *value* per year.
+
+    Companion to :func:`plot_breakpoint_raincloud`, which shows crossing
+    *counts*.  Here each converged animal contributes its fitted THI (or
+    barn-temp) breakpoint for the year, so the rows show how the herd's
+    threshold distribution shifts across 2021-2024.  Same per-year colour
+    code and Kruskal-Wallis test as the crossing-count raincloud.
+    """
+    import matplotlib.pyplot as plt
+    from scipy.stats import gaussian_kde, kruskal
+    setup_figure()
+
+    if bs.empty:
+        log.info("  broken_stick results empty, skipping breakpoint value raincloud")
+        return
+
+    for bp_col, conv_col, pred_label, fname in [
+        ("thi_breakpoint", "thi_converged", "THI breakpoint",
+         "raincloud_breakpoint_value_thi"),
+        ("temp_breakpoint", "temp_converged", "Barn temp breakpoint (°C)",
+         "raincloud_breakpoint_value_temp"),
+    ]:
+        conv = bs[bs[conv_col] == True].dropna(subset=[bp_col])
+        if conv.empty:
+            continue
+
+        years = sorted(conv["year"].unique().astype(int))
+        if len(years) < 2:
+            continue
+
+        year_data = [conv[conv["year"] == y][bp_col].to_numpy() for y in years]
+
+        all_vals = np.concatenate(year_data)
+        span = all_vals.max() - all_vals.min()
+        pad = 0.05 * span if span > 0 else 1.0
+        x_lo, x_hi = all_vals.min() - pad, all_vals.max() + pad
+
+        fig, ax = plt.subplots(figsize=(10, 1.5 + 1.4 * len(years)))
+
+        for i, (y, vals) in enumerate(zip(years, year_data)):
+            y_pos = i
+            colour = COLOURS["year"].get(y, COLOURS["below_bp"])
+
+            # Half-violin (KDE) — above row centre
+            if len(vals) > 5:
+                kde = gaussian_kde(vals)
+                x_kde = np.linspace(x_lo, x_hi, 200)
+                density = kde(x_kde)
+                density_scaled = density / density.max() * 0.38
+                ax.fill_between(x_kde, y_pos, y_pos + density_scaled,
+                                alpha=0.3, color=colour)
+                ax.plot(x_kde, y_pos + density_scaled,
+                        color=colour, linewidth=1.2)
+
+            # Jittered scatter — below row centre
+            jitter = np.random.uniform(-0.15, -0.35, len(vals))
+            ax.scatter(vals, y_pos + jitter, s=10, alpha=0.5,
+                       color=colour, edgecolors="none", zorder=3)
+
+            # Boxplot — at row centre
+            ax.boxplot(
+                vals, positions=[y_pos - 0.02], widths=0.12,
+                vert=False, patch_artist=True,
+                boxprops=dict(facecolor=colour, alpha=0.5, edgecolor="#333"),
+                medianprops=dict(color="#333", linewidth=2),
+                whiskerprops=dict(color="#333"),
+                capprops=dict(color="#333"),
+                flierprops=dict(marker="o", markersize=2, alpha=0.3),
+                manage_ticks=False,
+            )
+
+            # n animals + median label
+            ax.text(x_lo, y_pos - 0.38,
+                    f"n={len(vals)}, median={np.median(vals):.1f}",
+                    fontsize=8, color="#666", va="center")
+
+        # Kruskal-Wallis across years (same test as the crossing raincloud)
+        valid_groups = [v for v in year_data if len(v) >= 3]
+        if len(valid_groups) >= 2:
+            try:
+                stat, p = kruskal(*valid_groups)
+                ax.text(0.99, 0.02,
+                        f"Kruskal-Wallis H={stat:.1f}, p={p:.3g}",
+                        transform=ax.transAxes, ha="right", va="bottom",
+                        fontsize=9, color="#333",
+                        bbox=dict(boxstyle="round,pad=0.3",
+                                  facecolor="white", alpha=0.8))
+            except ValueError:
+                pass
+
+        ax.set_yticks(range(len(years)))
+        ax.set_yticklabels([str(y) for y in years], fontsize=11)
+        ax.set_xlabel(f"{pred_label} per animal")
+        ax.set_title(f"Annual {pred_label} per animal", fontsize=13,
+                     fontweight="bold")
+        ax.set_xlim(x_lo, x_hi)
+        ax.invert_yaxis()
+        fig.tight_layout()
+        save_figure(fig, fname, out_dir)
+
+        # CSV companion (one row per animal-year) for reproducibility
+        conv[["animal_id", "year", bp_col]].to_csv(
+            resolve_output(out_dir, f"{fname}.csv"), index=False)
+
+
+# ─────────────────────────────────────────────────────────────
 #  « breakpoint ICC forest plot »
 # ─────────────────────────────────────────────────────────────
 
