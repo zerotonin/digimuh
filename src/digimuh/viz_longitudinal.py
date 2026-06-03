@@ -178,6 +178,122 @@ def plot_longitudinal_breakpoints(bs: pd.DataFrame, out_dir: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────
+#  « post-hoc helpers for the per-year rainclouds »
+# ─────────────────────────────────────────────────────────────
+
+def _posthoc_pairwise(year_data: list, years: list,
+                      *, test: str = "Fisher:medianDiff",
+                      combination_n: int = 20_000):
+    """All pairwise year comparisons with BH-FDR via MultiGroupTest.
+
+    The omnibus Kruskal-Wallis only says *some* year differs; this is the
+    follow-up that says *which* pairs.  Returns the reRandomStats result
+    frame (groupA/groupB, n, raw + corrected p, ``h``, ``sig. level``),
+    or ``None`` when fewer than two years carry enough data.
+    """
+    from rerandomstats import MultiGroupTest
+    flat: list[float] = []
+    labels: list[str] = []
+    for y, vals in zip(years, year_data):
+        v = np.asarray(vals, dtype=float)
+        v = v[np.isfinite(v)]
+        if v.size >= 3:
+            flat.extend(v.tolist())
+            labels.extend([str(int(y))] * v.size)
+    if len(set(labels)) < 2:
+        return None
+    return MultiGroupTest(data=flat, group=labels, test=test,
+                          combination_n=combination_n,
+                          correction_type="fdr_bh").main()
+
+
+def _compact_letters(years: list, posthoc) -> dict[str, str]:
+    """Compact letter display from a MultiGroupTest result frame.
+
+    Groups sharing a letter are NOT significantly different after BH-FDR.
+    Built as a maximal-clique cover of the 'not different' graph (cheap
+    brute force; the number of years is small).
+    """
+    import itertools
+    import string
+
+    labels = [str(int(y)) for y in years]
+    notdiff = {frozenset((a, b)) for a, b in itertools.combinations(labels, 2)}
+    for _, row in posthoc.iterrows():
+        if bool(row["h"]):
+            notdiff.discard(frozenset((str(row["groupA"]), str(row["groupB"]))))
+
+    def is_clique(members) -> bool:
+        return all(frozenset((a, b)) in notdiff
+                   for a, b in itertools.combinations(members, 2))
+
+    cliques: list[set] = []
+    for size in range(len(labels), 0, -1):
+        for combo in itertools.combinations(labels, size):
+            members = set(combo)
+            if is_clique(members) and not any(members <= c for c in cliques):
+                cliques.append(members)
+
+    letters = {lab: "" for lab in labels}
+    for i, clique in enumerate(cliques):
+        for lab in clique:
+            letters[lab] += string.ascii_lowercase[i]
+    return {lab: "".join(sorted(letters[lab])) for lab in labels}
+
+
+def _annotate_posthoc(ax, year_data: list, years: list, fname: str,
+                      out_dir: Path) -> None:
+    """Run pairwise post-hoc, draw a compact letter display, write CSV.
+
+    Shared by both per-year rainclouds.  Years sharing a letter are not
+    significantly different (Fisher resampling, BH-FDR).
+    """
+    posthoc = _posthoc_pairwise(year_data, years)
+    if posthoc is None:
+        return
+    cld = _compact_letters(years, posthoc)
+    for i, y in enumerate(years):
+        ax.text(1.01, i, cld.get(str(int(y)), ""),
+                transform=ax.get_yaxis_transform(), ha="left", va="center",
+                fontsize=11, fontweight="bold", color="#333")
+    ax.text(0.01, 0.02,
+            "letters: post-hoc groups (Fisher resampling, BH-FDR; "
+            "shared letter = n.s.)",
+            transform=ax.transAxes, ha="left", va="bottom",
+            fontsize=7, color="#666")
+    posthoc.to_csv(resolve_output(out_dir, f"{fname}_posthoc.csv"), index=False)
+
+
+def _write_year_summary(year_data: list, years: list, fname: str,
+                        out_dir: Path) -> None:
+    """Write per-year and overall (all years pooled) n / median / IQR.
+
+    Lands as ``<fname>_summary.csv`` next to the figure — the pooled
+    ``overall`` row carries the cross-year median for the record (it is
+    deliberately not drawn on the figure).
+    """
+    rows = []
+    pooled = []
+    for y, vals in zip(years, year_data):
+        v = np.asarray(vals, dtype=float)
+        v = v[np.isfinite(v)]
+        pooled.append(v)
+        if v.size:
+            rows.append({"year": int(y), "n": int(v.size),
+                         "median": float(np.median(v)),
+                         "q25": float(np.percentile(v, 25)),
+                         "q75": float(np.percentile(v, 75))})
+    allv = np.concatenate(pooled) if pooled else np.array([])
+    if allv.size:
+        rows.append({"year": "overall", "n": int(allv.size),
+                     "median": float(np.median(allv)),
+                     "q25": float(np.percentile(allv, 25)),
+                     "q75": float(np.percentile(allv, 75))})
+    pd.DataFrame(rows).to_csv(
+        resolve_output(out_dir, f"{fname}_summary.csv"), index=False)
+
+
+# ─────────────────────────────────────────────────────────────
 #  « breakpoint crossing count raincloud per year »
 # ─────────────────────────────────────────────────────────────
 
@@ -283,6 +399,12 @@ def plot_breakpoint_raincloud(out_dir: Path) -> None:
                                   facecolor="white", alpha=0.8))
             except ValueError:
                 pass
+
+        # Post-hoc: pairwise years (Fisher resampling, BH-FDR) + CLD
+        _annotate_posthoc(ax, year_data, years,
+                          f"raincloud_crossing_count_{pred}", out_dir)
+        _write_year_summary(year_data, years,
+                            f"raincloud_crossing_count_{pred}", out_dir)
 
         ax.set_yticks(range(len(years)))
         ax.set_yticklabels([str(y) for y in years], fontsize=11)
@@ -390,6 +512,10 @@ def plot_breakpoint_value_raincloud(bs: pd.DataFrame, out_dir: Path) -> None:
                                   facecolor="white", alpha=0.8))
             except ValueError:
                 pass
+
+        # Post-hoc: pairwise years (Fisher resampling, BH-FDR) + CLD
+        _annotate_posthoc(ax, year_data, years, fname, out_dir)
+        _write_year_summary(year_data, years, fname, out_dir)
 
         ax.set_yticks(range(len(years)))
         ax.set_yticklabels([str(y) for y in years], fontsize=11)
