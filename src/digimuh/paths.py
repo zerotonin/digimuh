@@ -155,6 +155,8 @@ _PREFIX_RULES: tuple[tuple[str, str], ...] = (
     ("longitudinal_",            "longitudinal"),
     ("sankey_",                  "longitudinal"),
     ("raincloud_crossing_count_","longitudinal"),
+    ("raincloud_breakpoint_value_", "longitudinal"),
+    ("retest_breakpoint_",        "longitudinal"),
     ("breakpoint_icc_",          "longitudinal"),
     ("breakpoint_stability_",    "longitudinal"),
 )

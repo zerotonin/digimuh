@@ -45,6 +45,7 @@ from digimuh.viz_correlation import (
 from digimuh.viz_longitudinal import (
     plot_breakpoint_icc,
     plot_breakpoint_raincloud,
+    plot_breakpoint_retest,
     plot_breakpoint_value_raincloud,
     plot_longitudinal_breakpoints,
     plot_longitudinal_sankey,
@@ -144,6 +145,7 @@ def main() -> None:
         ("Longitudinal breakpoints", lambda: plot_longitudinal_breakpoints(bs, d)),
         ("Breakpoint raincloud", lambda: plot_breakpoint_raincloud(d)),
         ("Breakpoint value raincloud", lambda: plot_breakpoint_value_raincloud(bs, d)),
+        ("Breakpoint retest scatter", lambda: plot_breakpoint_retest(bs, d)),
         ("Breakpoint ICC forest", lambda: plot_breakpoint_icc(d)),
         ("Longitudinal Sankey", lambda: plot_longitudinal_sankey(bs, d)),
         ("Sankey diagrams", lambda: plot_threshold_sankey(bs, d)),

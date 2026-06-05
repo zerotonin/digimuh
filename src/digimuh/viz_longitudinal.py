@@ -282,13 +282,17 @@ def _write_year_summary(year_data: list, years: list, fname: str,
             rows.append({"year": int(y), "n": int(v.size),
                          "median": float(np.median(v)),
                          "q25": float(np.percentile(v, 25)),
-                         "q75": float(np.percentile(v, 75))})
+                         "q75": float(np.percentile(v, 75)),
+                         "min": float(v.min()),
+                         "max": float(v.max())})
     allv = np.concatenate(pooled) if pooled else np.array([])
     if allv.size:
         rows.append({"year": "overall", "n": int(allv.size),
                      "median": float(np.median(allv)),
                      "q25": float(np.percentile(allv, 25)),
-                     "q75": float(np.percentile(allv, 75))})
+                     "q75": float(np.percentile(allv, 75)),
+                     "min": float(allv.min()),
+                     "max": float(allv.max())})
     pd.DataFrame(rows).to_csv(
         resolve_output(out_dir, f"{fname}_summary.csv"), index=False)
 
@@ -530,6 +534,86 @@ def plot_breakpoint_value_raincloud(bs: pd.DataFrame, out_dir: Path) -> None:
         # CSV companion (one row per animal-year) for reproducibility
         conv[["animal_id", "year", bp_col]].to_csv(
             resolve_output(out_dir, f"{fname}.csv"), index=False)
+
+
+# ─────────────────────────────────────────────────────────────
+#  « year-to-year predictability (test-retest scatter) »
+# ─────────────────────────────────────────────────────────────
+
+def plot_breakpoint_retest(bs: pd.DataFrame, out_dir: Path) -> None:
+    """This-summer vs last-summer breakpoint scatter (predictability).
+
+    Third companion to the per-year value and crossing-count rainclouds:
+    each point is one cow's consecutive-summer pair (x = last summer,
+    y = this summer), coloured by the later year.  The identity line is
+    perfect stability; the flat fitted line and near-zero r show the
+    breakpoint does not carry over between years.
+    """
+    import matplotlib.pyplot as plt
+    from scipy import stats
+    setup_figure()
+
+    for bp_col, conv_col, label, unit, fname in [
+        ("thi_breakpoint", "thi_converged", "THI breakpoint", "",
+         "retest_breakpoint_thi"),
+        ("temp_breakpoint", "temp_converged", "Barn-temp breakpoint", " °C",
+         "retest_breakpoint_temp"),
+    ]:
+        d = bs[bs[conv_col] == True].dropna(subset=[bp_col])[
+            ["animal_id", "year", bp_col]].copy()
+        d["year"] = d["year"].astype(int)
+
+        rows = []
+        for aid, g in d.groupby("animal_id"):
+            m = dict(zip(g["year"], g[bp_col]))
+            for y in m:
+                if y + 1 in m:
+                    rows.append((aid, y, y + 1, m[y], m[y + 1]))
+        if len(rows) < 5:
+            continue
+        pairs = pd.DataFrame(rows, columns=["animal_id", "from_year",
+                                            "to_year", "bp_last", "bp_this"])
+        x = pairs["bp_last"].to_numpy()
+        y = pairs["bp_this"].to_numpy()
+        r, _ = stats.pearsonr(x, y)
+        slope, intercept, *_ = stats.linregress(x, y)
+        diff = y - x
+        loa = 1.96 * diff.std(ddof=1)
+
+        lo, hi = min(x.min(), y.min()), max(x.max(), y.max())
+        pad = 0.04 * (hi - lo)
+        lo, hi = lo - pad, hi + pad
+
+        fig, ax = plt.subplots(figsize=(6, 6))
+        ax.plot([lo, hi], [lo, hi], ls="--", color=COLOURS["identity"],
+                linewidth=1.2, zorder=1, label="identity (perfect stability)")
+        for yr in sorted(pairs["to_year"].unique()):
+            mask = pairs["to_year"].to_numpy() == yr
+            ax.scatter(x[mask], y[mask], s=24, alpha=0.6, zorder=3,
+                       color=COLOURS["year"].get(int(yr), COLOURS["below_bp"]),
+                       edgecolors="white", linewidths=0.4, label=str(int(yr)))
+        xs = np.array([lo, hi])
+        ax.plot(xs, intercept + slope * xs, color="#333", linewidth=2,
+                zorder=4, label=f"fit (slope {slope:.2f})")
+
+        ax.set_xlim(lo, hi)
+        ax.set_ylim(lo, hi)
+        ax.set_aspect("equal")
+        ax.set_xlabel(f"{label} — last summer{unit}")
+        ax.set_ylabel(f"{label} — this summer{unit}")
+        ax.set_title(f"Year-to-year predictability of {label}",
+                     fontsize=12, fontweight="bold")
+        ax.text(0.03, 0.97,
+                f"r = {r:+.2f}  (r² = {r * r:.3f})\n"
+                f"slope = {slope:.2f}\n"
+                f"95% limits of agreement: ±{loa:.1f}{unit}",
+                transform=ax.transAxes, va="top", ha="left", fontsize=9,
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
+                          alpha=0.85, edgecolor="#ccc"))
+        ax.legend(fontsize=8, loc="lower right", framealpha=0.9)
+        fig.tight_layout()
+        save_figure(fig, fname, out_dir)
+        pairs.to_csv(resolve_output(out_dir, f"{fname}.csv"), index=False)
 
 
 # ─────────────────────────────────────────────────────────────
