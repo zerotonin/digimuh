@@ -20,10 +20,12 @@ import pandas as pd
 from digimuh.console import kv, section, setup_logging
 from digimuh.paths import resolve_input, resolve_output
 from digimuh.stats_annual_yield import (
+    aggregate_per_cow,
     build_median_surface,
     compute_annual_zscores,
     compute_heatstress_duration_deltas,
     summarise_duration_deltas,
+    test_duration_medians,
 )
 from digimuh.stats_lactation_curve import load_calvings
 from digimuh.viz_annual_yield import plot_heatstress_duration, plot_yield_heatmap
@@ -91,14 +93,36 @@ def main() -> None:
         return
     deltas.to_csv(
         resolve_output(data_dir, "heatstress_duration_deltas.csv"), index=False)
-    summary = summarise_duration_deltas(deltas)
+
+    # Pooled median (every run-day weighted equally) — reference.
+    pooled = summarise_duration_deltas(deltas)
+    pooled.to_csv(
+        resolve_output(data_dir, "heatstress_duration_pooled.csv"), index=False)
+
+    # Per-cow → inter-cow median (every cow weighted equally) — headline.
+    per_cow = aggregate_per_cow(deltas)
+    per_cow.to_csv(
+        resolve_output(data_dir, "heatstress_duration_per_cow.csv"), index=False)
+    summary = summarise_duration_deltas(per_cow)
+
+    # Wilcoxon signed-rank (median ≠ 0) per streak day, BH-FDR corrected.
+    tests = test_duration_medians(per_cow)
+    tests.to_csv(
+        resolve_output(data_dir, "heatstress_duration_tests.csv"), index=False)
+
     for tag, name in (("residual", "heatstress_duration_residual"),
                       ("kg", "heatstress_duration_kg")):
-        plot_heatstress_duration(summary, deltas, value_tag=tag,
-                                 name=name, out_dir=data_dir)
+        plot_heatstress_duration(
+            summary, per_cow, value_tag=tag, name=name, out_dir=data_dir,
+            tests=tests[tests["metric"] == tag])
+
     kv("run-day deltas", len(deltas))
     kv("cow-year runs",
        deltas.groupby(["animal_id", "year", "run_id"]).ngroups)
+    kv("cows in duration analysis", per_cow["animal_id"].nunique())
+    for _, r in tests[tests["metric"] == "residual"].iterrows():
+        kv(f"day {int(r['streak_day'])} (residual)",
+           f"med={r['median']:+.2f}  p_fdr={r['p_fdr']:.1e} {r['stars']}")
 
 
 if __name__ == "__main__":
