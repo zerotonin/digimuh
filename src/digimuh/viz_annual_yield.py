@@ -20,6 +20,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from digimuh.constants import WONG_BLUE, WONG_GREY, WONG_SKY, WONG_VERMILLION
 from digimuh.viz_base import save_figure, setup_figure
 
 log = logging.getLogger("digimuh.viz.annual_yield")
@@ -133,10 +134,10 @@ def plot_heatstress_duration(
         gridspec_kw={"height_ratios": [2, 1.4], "hspace": 0.08})
 
     # ── top: median Δ + 95% CI (the headline, zoomed) ──────
-    ax_t.axhline(0.0, color="#888888", lw=1.0, ls="--", zorder=1)
+    ax_t.axhline(0.0, color=WONG_GREY, lw=1.0, ls="--", zorder=1)
     ax_t.fill_between(summary["streak_day"], summary[lo], summary[hi],
-                      color="#D55E00", alpha=0.20, zorder=2, label="95% CI")
-    ax_t.plot(summary["streak_day"], summary[med], "-o", color="#D55E00",
+                      color=WONG_VERMILLION, alpha=0.20, zorder=2, label="95% CI")
+    ax_t.plot(summary["streak_day"], summary[med], "-o", color=WONG_VERMILLION,
               lw=2, zorder=4, label="median Δ")
     span = float(summary[hi].max() - summary[lo].min())
     pad = 0.25 * span if span > 0 else 1.0
@@ -144,7 +145,7 @@ def plot_heatstress_duration(
     for _, r in summary.iterrows():
         ax_t.annotate(f"n={int(r['n'])}", (r["streak_day"], r[hi]),
                       textcoords="offset points", xytext=(0, 6),
-                      ha="center", fontsize=8, color="#444444")
+                      ha="center", fontsize=8, color=WONG_GREY)
     if tests is not None:
         star_map = dict(zip(tests["streak_day"], tests["stars"]))
         for _, r in summary.iterrows():
@@ -154,7 +155,7 @@ def plot_heatstress_duration(
             ax_t.annotate(stars, (r["streak_day"], r[med]),
                           textcoords="offset points", xytext=(0, -14),
                           ha="center", fontsize=12, fontweight="bold",
-                          color="#000000")
+                          color="black")
     ax_t.set_ylabel(f"median Δ yield — {unit}")
     ax_t.set_title("Milk-yield response to heat-stress duration")
     ax_t.legend(frameon=False, loc="lower left")
@@ -162,13 +163,13 @@ def plot_heatstress_duration(
     # ── bottom: per-day distribution (box, 5–95% whiskers) ─
     data = [deltas.loc[deltas["streak_day"] == k, col].dropna().to_numpy()
             for k in ks]
-    ax_b.axhline(0.0, color="#888888", lw=1.0, ls="--", zorder=1)
+    ax_b.axhline(0.0, color=WONG_GREY, lw=1.0, ls="--", zorder=1)
     bp = ax_b.boxplot(data, positions=ks, widths=0.6, whis=(5, 95),
                       showfliers=False, patch_artist=True, zorder=2)
     for patch in bp["boxes"]:
-        patch.set(facecolor="#56B4E9", alpha=0.55, edgecolor="#33647d")
+        patch.set(facecolor=WONG_SKY, alpha=0.55, edgecolor=WONG_BLUE)
     for med_ln in bp["medians"]:
-        med_ln.set(color="#33647d", lw=1.5)
+        med_ln.set(color=WONG_BLUE, lw=1.5)
     ax_b.set_xlabel("consecutive heat-stress days")
     ax_b.set_ylabel(f"per-cow median Δ — {unit}")
     ax_b.set_xticks(ks)
