@@ -549,6 +549,21 @@ def plot_examples(
     if predictors is not None:
         configs = [c for c in configs if c[5] in predictors]
 
+    # Shared y-limits per response variable, so the THI and barn-temp
+    # versions (which plot the *same* response on y) use identical
+    # y-axes and can be read side by side.  Robust 0.5-99.5 percentiles
+    # trim sensor dropouts; a 5% pad keeps fit curves off the frame.
+    response_ylim: dict[str, tuple[float, float]] = {}
+    for src_df, resp_col in ((rumen, "body_temp"), (resp, "resp_rate")):
+        if src_df is None or src_df.empty or resp_col not in src_df.columns:
+            continue
+        vals = src_df[resp_col].to_numpy(dtype=float)
+        vals = vals[np.isfinite(vals)]
+        if vals.size:
+            lo, hi = np.percentile(vals, [0.5, 99.5])
+            pad = 0.05 * (hi - lo) if hi > lo else 1.0
+            response_ylim[resp_col] = (lo - pad, hi + pad)
+
     for (signal, data, response_col, ylabel,
          prefix, bs_prefix, env_col, env_label, x_range) in configs:
         if data is None or data.empty:
@@ -717,6 +732,11 @@ def plot_examples(
 
         for ax in axes_flat[len(selected):]:
             ax.set_axis_off()
+
+        # Apply the shared response y-limit so this figure matches its
+        # sibling predictor figure (sharey propagates to all panels).
+        if response_col in response_ylim:
+            axes_flat[0].set_ylim(*response_ylim[response_col])
 
         fig.suptitle(
             f"Diagnostic examples: {ylabel.split('(')[0].strip()} vs {env_label}",
