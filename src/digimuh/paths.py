@@ -38,6 +38,7 @@ SUBDIRS: dict[str, str] = {
     "production":   "04_production",
     "composition":  "05_composition",
     "longitudinal": "06_longitudinal",
+    "annual":       "07_annual_yield",
 }
 
 
@@ -118,6 +119,10 @@ _STEM_TO_SUBJECT: dict[str, str] = {
     "breakpoint_stability":             "longitudinal",
     "breakpoint_icc":                   "longitudinal",
     "breakpoint_icc_forest":            "longitudinal",
+
+    # ── 07 annual yield ───────────────────────────────────
+    "annual_zscores":                   "annual",
+    "heatstress_duration_deltas":       "annual",
 }
 
 
@@ -159,6 +164,10 @@ _PREFIX_RULES: tuple[tuple[str, str], ...] = (
     ("retest_breakpoint_",        "longitudinal"),
     ("breakpoint_icc_",          "longitudinal"),
     ("breakpoint_stability_",    "longitudinal"),
+
+    # annual yield
+    ("heatmap_yield_",           "annual"),
+    ("heatstress_duration_",     "annual"),
 )
 
 
