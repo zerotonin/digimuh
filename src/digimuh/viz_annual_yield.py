@@ -104,16 +104,20 @@ def plot_heatstress_duration(
     value_tag: str,
     name: str,
     out_dir: Path,
+    tests: pd.DataFrame | None = None,
 ) -> None:
     """Yield delta vs consecutive heat-stress days: median+CI over rainclouds.
 
     Args:
         summary: From :func:`stats_annual_yield.summarise_duration_deltas`.
-        deltas: From
-            :func:`stats_annual_yield.compute_heatstress_duration_deltas`.
+        deltas: Per-cow medians from
+            :func:`stats_annual_yield.aggregate_per_cow`.
         value_tag: ``"residual"`` (DIM-adjusted) or ``"kg"``.
         name: Output stem.
         out_dir: Results directory.
+        tests: Optional per-streak-day significance table from
+            :func:`stats_annual_yield.test_duration_medians` (already
+            filtered to this metric); annotates BH-FDR stars on the median.
     """
     import matplotlib.pyplot as plt
 
@@ -141,6 +145,16 @@ def plot_heatstress_duration(
         ax_t.annotate(f"n={int(r['n'])}", (r["streak_day"], r[hi]),
                       textcoords="offset points", xytext=(0, 6),
                       ha="center", fontsize=8, color="#444444")
+    if tests is not None:
+        star_map = dict(zip(tests["streak_day"], tests["stars"]))
+        for _, r in summary.iterrows():
+            stars = star_map.get(r["streak_day"], "")
+            if not stars or stars == "n.s.":
+                continue
+            ax_t.annotate(stars, (r["streak_day"], r[med]),
+                          textcoords="offset points", xytext=(0, -14),
+                          ha="center", fontsize=12, fontweight="bold",
+                          color="#000000")
     ax_t.set_ylabel(f"median Δ yield — {unit}")
     ax_t.set_title("Milk-yield response to heat-stress duration")
     ax_t.legend(frameon=False, loc="lower left")
@@ -156,7 +170,7 @@ def plot_heatstress_duration(
     for med_ln in bp["medians"]:
         med_ln.set(color="#33647d", lw=1.5)
     ax_b.set_xlabel("consecutive heat-stress days")
-    ax_b.set_ylabel(f"Δ yield — {unit}")
+    ax_b.set_ylabel(f"per-cow median Δ — {unit}")
     ax_b.set_xticks(ks)
 
     save_figure(fig, name, out_dir)
