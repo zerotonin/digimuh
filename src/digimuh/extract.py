@@ -215,16 +215,70 @@ def _exclude_drinking_windows(df: pd.DataFrame) -> pd.DataFrame:
     return df.loc[keep].drop(columns=["drink_cycles"])
 
 
-def _get_barn(con, date_enter, date_exit, barn_cache):
+# ─────────────────────────────────────────────────────────────
+#  « alternative climate source: HOBO weather loggers »
+#
+#  smaxtec_barns ships a proprietary temp_hum_index; HOBO does not,
+#  so HOBO THI is derived with the standard NRC (1971) dairy formula
+#  from air temperature and relative humidity.  Absolute THI values
+#  are therefore NOT directly comparable between the two sources, but
+#  the breakpoint structure (does a threshold exist, and where on the
+#  temperature axis) is the object of the comparison.
+# ─────────────────────────────────────────────────────────────
+
+def _compute_thi(temp_c, rh_pct):
+    """Temperature-Humidity Index, NRC (1971): air temp °C, RH %."""
+    t_f = 1.8 * temp_c + 32.0
+    return t_f - (0.55 - 0.0055 * rh_pct) * (1.8 * temp_c - 26.0)
+
+
+def _hobo_climate_columns(con) -> tuple[list[str], list[str]]:
+    """Discover HOBO temperature and RH columns (logger-serial prefixed)."""
+    cols = [row[1] for row in con.execute('PRAGMA table_info("hobo_weather")')]
+    temp_cols = [c for c in cols if c.endswith("_temperature")]
+    rh_cols = [c for c in cols if c.endswith("_rh")]
+    return temp_cols, rh_cols
+
+
+def _query_hobo_barn(con, date_enter, date_exit) -> pd.DataFrame:
+    """HOBO climate as barn_temp + barn_rh + derived barn_thi per reading.
+
+    Averages across all logger positions (skipping NULLs) so the result
+    is a single barn-mean series, matching the smaXtec barn averaging.
+    """
+    temp_cols, rh_cols = _hobo_climate_columns(con)
+    if not temp_cols or not rh_cols:
+        return pd.DataFrame()
+    select = ", ".join(f'"{c}"' for c in temp_cols + rh_cols)
+    sql = (f'SELECT "datetime" AS timestamp, {select} FROM hobo_weather '
+           'WHERE "datetime" >= ? AND "datetime" <= ?')
+    df = query_df(con, sql, (date_enter, date_exit))
+    if df.empty:
+        return df
+    df["barn_temp"] = df[temp_cols].mean(axis=1, skipna=True)
+    df["barn_rh"] = df[rh_cols].mean(axis=1, skipna=True)
+    df = df.dropna(subset=["barn_temp", "barn_rh"])
+    if df.empty:
+        return pd.DataFrame()
+    df["barn_thi"] = _compute_thi(df["barn_temp"], df["barn_rh"])
+    return df[["timestamp", "barn_temp", "barn_rh", "barn_thi"]]
+
+
+def _get_barn(con, date_enter, date_exit, barn_cache,
+              climate_source: str = "smaxtec"):
     """Fetch and cache barn climate at native resolution.
 
     Returns barn data with a timestamp column, ready for nearest-time
-    merge with rumen/respiration data via pd.merge_asof.
+    merge with rumen/respiration data via pd.merge_asof.  ``climate_source``
+    selects the smaXtec barn sensors (default) or the HOBO loggers.
     """
     key = (date_enter, date_exit)
     if key in barn_cache:
         return barn_cache[key]
-    barn = query_df(con, SQL_BARN, (date_enter, date_exit))
+    if climate_source == "hobo":
+        barn = _query_hobo_barn(con, date_enter, date_exit)
+    else:
+        barn = query_df(con, SQL_BARN, (date_enter, date_exit))
     if not barn.empty:
         barn["timestamp"] = pd.to_datetime(barn["timestamp"])
         barn = barn.sort_values("timestamp").reset_index(drop=True)
@@ -238,6 +292,7 @@ def _get_barn(con, date_enter, date_exit, barn_cache):
 
 def extract_rumen_barn(
     con, tierauswahl: pd.DataFrame, exclude_drinking: bool = True,
+    climate_source: str = "smaxtec",
 ) -> pd.DataFrame:
     """Extract rumen temp + barn climate for all selected animals.
 
@@ -247,6 +302,8 @@ def extract_rumen_barn(
         exclude_drinking: If True, exclude drinking events + 15 min
             padding.  If False, rely solely on smaXtec's built-in
             ``temp_without_drink_cycles`` correction.
+        climate_source: ``"smaxtec"`` (barn sensors, default) or
+            ``"hobo"`` (weather loggers, THI derived via NRC 1971).
     """
     barn_cache: dict = {}
     frames = []
@@ -273,7 +330,7 @@ def extract_rumen_barn(
             continue
         rumen = rumen.sort_values("timestamp").reset_index(drop=True)
 
-        barn = _get_barn(con, enter, exit_, barn_cache)
+        barn = _get_barn(con, enter, exit_, barn_cache, climate_source)
         if barn.empty:
             continue
 
@@ -299,7 +356,8 @@ def extract_rumen_barn(
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
-def extract_respiration_barn(con, tierauswahl: pd.DataFrame) -> pd.DataFrame:
+def extract_respiration_barn(con, tierauswahl: pd.DataFrame,
+                             climate_source: str = "smaxtec") -> pd.DataFrame:
     """Extract respiration + barn climate for all selected animals."""
     barn_cache: dict = {}
     frames = []
@@ -320,7 +378,7 @@ def extract_respiration_barn(con, tierauswahl: pd.DataFrame) -> pd.DataFrame:
         resp["timestamp"] = pd.to_datetime(resp["timestamp"])
         resp = resp.sort_values("timestamp").reset_index(drop=True)
 
-        barn = _get_barn(con, enter, exit_, barn_cache)
+        barn = _get_barn(con, enter, exit_, barn_cache, climate_source)
         if barn.empty:
             continue
 
@@ -498,12 +556,35 @@ def extract_calvings(con) -> pd.DataFrame:
     return df
 
 
-def extract_climate(con, tierauswahl: pd.DataFrame) -> pd.DataFrame:
+def _hobo_climate_daily(con, start: str, end: str) -> pd.DataFrame:
+    """Daily HOBO climate summary, same columns as SQL_CLIMATE_DAILY."""
+    barn = _query_hobo_barn(con, start, end)
+    if barn.empty:
+        return pd.DataFrame()
+    barn["day"] = pd.to_datetime(barn["timestamp"]).dt.normalize()
+    g = barn.groupby("day")
+    return pd.DataFrame({
+        "barn_temp_mean": g["barn_temp"].mean(),
+        "barn_temp_min": g["barn_temp"].min(),
+        "barn_temp_max": g["barn_temp"].max(),
+        "barn_rh_mean": g["barn_rh"].mean(),
+        "barn_thi_mean": g["barn_thi"].mean(),
+        "barn_thi_min": g["barn_thi"].min(),
+        "barn_thi_max": g["barn_thi"].max(),
+    }).reset_index()
+
+
+def extract_climate(con, tierauswahl: pd.DataFrame,
+                    climate_source: str = "smaxtec") -> pd.DataFrame:
     """Extract daily barn climate for each summer in the dataset."""
     years = sorted(tierauswahl["year"].dropna().unique().astype(int))
     frames = []
     for year in years:
-        df = query_df(con, SQL_CLIMATE_DAILY, (f"{year}-06-01", f"{year}-09-30"))
+        start, end = f"{year}-06-01", f"{year}-09-30"
+        if climate_source == "hobo":
+            df = _hobo_climate_daily(con, start, end)
+        else:
+            df = query_df(con, SQL_CLIMATE_DAILY, (start, end))
         if not df.empty:
             df["year"] = year
             df["day"] = pd.to_datetime(df["day"])
@@ -530,6 +611,11 @@ def main() -> None:
         help="Use only smaXtec's built-in temp_without_drink_cycles "
              "correction for drinking events.",
     )
+    parser.add_argument(
+        "--climate-source", choices=("smaxtec", "hobo"), default="smaxtec",
+        help="Environmental predictor source: 'smaxtec' barn sensors "
+             "(default) or 'hobo' weather loggers (THI via NRC 1971).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -554,6 +640,10 @@ def main() -> None:
              if not exclude_drinking
              else "smaXtec + 15-min post-drinking exclusion window")
 
+    climate_source = args.climate_source
+    log.info("Climate source: %s", "HOBO weather loggers (THI via NRC 1971)"
+             if climate_source == "hobo" else "smaXtec barn sensors")
+
     con = connect_db(cfg.database)
     ta = load_tierauswahl(cfg.tierauswahl)
     ta.to_csv(resolve_output(cfg.output, "tierauswahl.csv"), index=False)
@@ -561,12 +651,13 @@ def main() -> None:
              len(ta), sorted(ta["year"].dropna().unique().astype(int)))
 
     log.info("Extracting rumen + barn data …")
-    rumen = extract_rumen_barn(con, ta, exclude_drinking=exclude_drinking)
+    rumen = extract_rumen_barn(con, ta, exclude_drinking=exclude_drinking,
+                               climate_source=climate_source)
     rumen.to_csv(resolve_output(cfg.output, "rumen_barn.csv"), index=False)
     log.info("  → %d rows, %d animals", len(rumen), rumen["animal_id"].nunique())
 
     log.info("Extracting respiration + barn data …")
-    resp = extract_respiration_barn(con, ta)
+    resp = extract_respiration_barn(con, ta, climate_source=climate_source)
     resp.to_csv(resolve_output(cfg.output, "respiration_barn.csv"), index=False)
     log.info("  → %d rows, %d animals", len(resp), resp["animal_id"].nunique())
 
@@ -607,7 +698,7 @@ def main() -> None:
     )
 
     log.info("Extracting barn climate …")
-    climate = extract_climate(con, ta)
+    climate = extract_climate(con, ta, climate_source=climate_source)
     climate.to_csv(resolve_output(cfg.output, "climate_daily.csv"),
                    index=False)
     log.info("  → %d daily records", len(climate))
