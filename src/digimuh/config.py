@@ -84,14 +84,14 @@ def _load_yaml(path: Path) -> dict[str, Any]:
         return {}
     try:
         import yaml
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
         log.debug("Loaded config from %s", path)
         return data
     except ImportError:
         # Fall back to simple key: value parsing if pyyaml not installed
         data = {}
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#"):
@@ -113,7 +113,7 @@ def _load_env(path: Path) -> dict[str, str]:
     if not path.is_file():
         return {}
     data = {}
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#"):
@@ -261,7 +261,7 @@ def setup_interactive() -> None:
 
     # Write YAML
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    with open(CONFIG_FILE, "w") as f:
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         f.write("# DigiMuh configuration\n")
         f.write(f"# Machine: {os.uname().nodename}\n")
         f.write(f"# Created: {__import__('datetime').datetime.now().isoformat()}\n\n")

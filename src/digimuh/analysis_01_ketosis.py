@@ -304,7 +304,7 @@ def main() -> None:
 
     # Save results summary
     import json
-    with open(args.out / "ketosis_results.json", "w") as f:
+    with open(args.out / "ketosis_results.json", "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, default=str)
 
     con.close()
