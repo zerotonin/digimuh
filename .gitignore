@@ -21,6 +21,9 @@ docs/_build/
 *~
 results/*
 
+# Syncthing folder marker — local sync artefact, not project content.
+.stfolder/
+
 # Real animal-selection spreadsheets are private input data (collaborator's
 # herd records, EU ear-tag IDs) — never commit them.  The synthetic
 # Tierauswahl.example.xlsx is the only one tracked, to document the schema.
