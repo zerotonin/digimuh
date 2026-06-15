@@ -279,6 +279,34 @@ def _baseline_before(cal, first_idx, lookback) -> tuple[float, float] | None:
 #  « Duration-response summary + bootstrap CI »
 # ─────────────────────────────────────────────────────────────
 
+def aggregate_per_cow(
+    deltas: pd.DataFrame,
+    max_streak: int = 7,
+) -> pd.DataFrame:
+    """Collapse run-day deltas to one median per cow per streak-day.
+
+    Stage one of the per-cow → inter-cow estimator: each cow contributes
+    her own median delta at each streak position, so a cow with many
+    heat-stress runs does not dominate the herd-level summary.  Feed the
+    result to :func:`summarise_duration_deltas` to obtain the inter-cow
+    median (median across cows) with a cow-level bootstrap CI.
+
+    Args:
+        deltas: Output of :func:`compute_heatstress_duration_deltas`.
+        max_streak: Keep streak days 1…max_streak.
+
+    Returns:
+        DataFrame: ``animal_id``, ``streak_day``, ``delta_residual``,
+        ``delta_kg`` (each the cow's median at that streak day), ``n_obs``.
+    """
+    d = deltas[deltas["streak_day"] <= max_streak]
+    return (d.groupby(["animal_id", "streak_day"])
+             .agg(delta_residual=("delta_residual", "median"),
+                  delta_kg=("delta_kg", "median"),
+                  n_obs=("delta_residual", "size"))
+             .reset_index())
+
+
 def summarise_duration_deltas(
     deltas: pd.DataFrame,
     max_streak: int = 7,
@@ -287,8 +315,13 @@ def summarise_duration_deltas(
 ) -> pd.DataFrame:
     """Median yield delta per streak-day with bootstrap 95% CI.
 
+    Operates on whatever rows it is given: pass the raw run-day deltas
+    for the pooled median, or the :func:`aggregate_per_cow` table for the
+    inter-cow median (median of per-cow medians, bootstrap over cows).
+
     Args:
-        deltas: Output of :func:`compute_heatstress_duration_deltas`.
+        deltas: Run-day deltas, or per-cow medians from
+            :func:`aggregate_per_cow`.
         max_streak: Report streak days 1…max_streak (deeper runs pooled
             out — the sample thins quickly).
         n_boot: Bootstrap resamples for the median CI.
@@ -316,4 +349,65 @@ def summarise_duration_deltas(
             row[f"ci_lo_{tag}"] = float(np.percentile(boot, 2.5))
             row[f"ci_hi_{tag}"] = float(np.percentile(boot, 97.5))
         rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _pvalue_stars(p: float) -> str:
+    """Standard significance stars (n.s. / * / ** / ***)."""
+    if not np.isfinite(p):
+        return "n.s."
+    if p < 0.001:
+        return "***"
+    if p < 0.01:
+        return "**"
+    if p < 0.05:
+        return "*"
+    return "n.s."
+
+
+def test_duration_medians(
+    per_cow: pd.DataFrame,
+    max_streak: int = 7,
+) -> pd.DataFrame:
+    """Wilcoxon signed-rank test that each streak-day median ≠ 0, BH-FDR.
+
+    One test per streak day, on the per-cow median deltas (one value per
+    cow — independent observations), asking whether the centre of that
+    per-cow distribution differs from zero.  Raw p-values are
+    Benjamini-Hochberg FDR corrected *within each response metric*
+    (the seven streak-day tests form the family).
+
+    Args:
+        per_cow: Output of :func:`aggregate_per_cow` (per-cow medians).
+        max_streak: Number of streak days tested (the test family size).
+
+    Returns:
+        DataFrame: ``metric`` ("residual"/"kg"), ``streak_day``,
+        ``n_cows``, ``median``, ``wilcoxon_stat``, ``p_raw``, ``p_fdr``,
+        ``stars``.
+    """
+    from rerandomstats import correct_pvalues_array
+    from scipy.stats import wilcoxon
+
+    rows: list[dict] = []
+    for tag, col in (("residual", "delta_residual"), ("kg", "delta_kg")):
+        block: list[dict] = []
+        for k in range(1, max_streak + 1):
+            x = per_cow.loc[per_cow["streak_day"] == k, col].dropna().to_numpy()
+            if x.size == 0:
+                continue
+            try:
+                stat, p = wilcoxon(x)
+            except ValueError:
+                # All values zero → no evidence against H0.
+                stat, p = np.nan, 1.0
+            block.append(dict(metric=tag, streak_day=k, n_cows=int(x.size),
+                              median=float(np.median(x)),
+                              wilcoxon_stat=float(stat), p_raw=float(p)))
+        adj = correct_pvalues_array(
+            np.array([b["p_raw"] for b in block]), method="fdr_bh")
+        for b, pa in zip(block, adj):
+            b["p_fdr"] = float(pa)
+            b["stars"] = _pvalue_stars(float(pa))
+            rows.append(b)
     return pd.DataFrame(rows)
