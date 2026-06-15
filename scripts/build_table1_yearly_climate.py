@@ -27,12 +27,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from digimuh.config import load_config
+
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s | %(message)s")
 log = logging.getLogger("digimuh.table1")
 
 
-DB_PATH       = Path("/media/geuba03p/GEURTEN01/cow.db")
+DB_PATH       = Path(load_config().database)
 DATA_DIR      = Path("results/broken_stick")
 OUT_PATH      = DATA_DIR / "01_extract" / "table1_yearly_climate.md"
 NEUBAU_GROUPS = (1005, 1006)
@@ -298,7 +300,8 @@ def render_markdown(climate, rrt, yield_, cohort) -> str:
 
 def main() -> None:
     if not DB_PATH.exists():
-        log.error("Database not found at %s", DB_PATH)
+        log.error("Database not found at %s — set DIGIMUH_DB or the "
+                  "`database` key in your config to point at cow.db", DB_PATH)
         sys.exit(1)
     con = sqlite3.connect(DB_PATH)
 

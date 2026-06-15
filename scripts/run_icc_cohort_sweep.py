@@ -39,6 +39,7 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 
 import pandas as pd
 
+from digimuh.config import load_config
 from digimuh.extract import (
     extract_production,
     extract_rumen_barn,
@@ -58,7 +59,7 @@ log = logging.getLogger("digimuh.icc_sweep")
 
 
 # ── Configuration ────────────────────────────────────────────────
-DB_PATH        = Path("/media/geuba03p/GEURTEN01/cow.db")
+DB_PATH        = Path(load_config().database)
 DATA_DIR       = Path("results/broken_stick")
 TIERAUSWAHL    = Path("Tierauswahl.xlsx")
 TIERAUSWAHL_X  = Path("Tierauswahl_extended.xlsx")
@@ -222,7 +223,9 @@ def run_cohort(con: sqlite3.Connection, name: str, ta: pd.DataFrame,
 def main() -> None:
     setup_figure()
     if not DB_PATH.exists():
-        raise SystemExit(f"DB not found at {DB_PATH}")
+        raise SystemExit(
+            f"DB not found at {DB_PATH} — set DIGIMUH_DB or the `database` "
+            "key in your config to point at cow.db")
     con = sqlite3.connect(DB_PATH)
 
     # Calvings: needed for DIM + lactation_nr (residual ICC mode).
