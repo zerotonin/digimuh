@@ -139,7 +139,7 @@ python -m pytest
 
 ## Analysis pipeline
 
-After ingestion, five analysis scripts are available as CLI commands.  Each
+After ingestion, several analysis scripts are available as CLI commands.  Each
 creates analysis views on first run, queries the database, and writes results
 (CSV data + figures) to an output directory.
 
@@ -154,6 +154,11 @@ digimuh-stats   --data results/broken_stick
 digimuh-plots   --data results/broken_stick
 #    …or run all three in one shot (the Frontiers 2026 pipeline):
 digimuh-frontiers --data results/broken_stick
+
+# 0b. Year-round milk yield — per-cow-year z-scores, median-yield heatmaps
+#     (day-of-year × lactation / DIM), and milk-yield response to the number
+#     of consecutive heat-stress days.  Reuses the broken-stick extract CSVs:
+digimuh-annual --data results/broken_stick
 
 # 1. Subclinical ketosis risk — FPR × rumination × milk yield
 digimuh-ketosis --db cow.db --out results/ketosis

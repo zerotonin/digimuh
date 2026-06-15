@@ -7,6 +7,10 @@ Core Infrastructure
 .. automodule:: digimuh
    :members:
 
+.. automodule:: digimuh.constants
+   :members:
+   :undoc-members:
+
 .. automodule:: digimuh.config
    :members:
    :undoc-members:
@@ -15,14 +19,18 @@ Core Infrastructure
    :members:
    :undoc-members:
 
+.. automodule:: digimuh.paths
+   :members:
+   :undoc-members:
+
 .. automodule:: digimuh.analysis_utils
    :members:
    :undoc-members:
 
-Data Ingestion
---------------
+Data Ingestion & Extraction
+---------------------------
 
-.. automodule:: digimuh.ingest_cow_db
+.. automodule:: digimuh.ingest
    :members:
    :undoc-members:
 
@@ -30,55 +38,117 @@ Data Ingestion
    :members:
    :undoc-members:
 
-Analysis 00 — Broken-Stick Regression
---------------------------------------
-
-.. automodule:: digimuh.analysis_00_broken_stick
+.. automodule:: digimuh.extract
    :members:
    :undoc-members:
 
-.. automodule:: digimuh.analysis_00a_extract
+Statistics
+----------
+
+.. automodule:: digimuh.stats_core
    :members:
    :undoc-members:
 
-.. automodule:: digimuh.analysis_00b_stats
+.. automodule:: digimuh.stats_temporal
    :members:
    :undoc-members:
 
-.. automodule:: digimuh.analysis_00c_plots
+.. automodule:: digimuh.stats_production
    :members:
    :undoc-members:
 
-Analysis 01 — Ketosis
----------------------
+.. automodule:: digimuh.stats_lactation_curve
+   :members:
+   :undoc-members:
+
+.. automodule:: digimuh.stats_milk_composition
+   :members:
+   :undoc-members:
+
+.. automodule:: digimuh.stats_longitudinal
+   :members:
+   :undoc-members:
+
+.. automodule:: digimuh.stats_annual_yield
+   :members:
+   :undoc-members:
+
+.. automodule:: digimuh.stats_runner
+   :members:
+   :undoc-members:
+
+Visualisation
+-------------
+
+.. automodule:: digimuh.viz_base
+   :members:
+   :undoc-members:
+
+.. automodule:: digimuh.viz_breakpoints
+   :members:
+   :undoc-members:
+
+.. automodule:: digimuh.viz_correlation
+   :members:
+   :undoc-members:
+
+.. automodule:: digimuh.viz_production
+   :members:
+   :undoc-members:
+
+.. automodule:: digimuh.viz_milk_composition
+   :members:
+   :undoc-members:
+
+.. automodule:: digimuh.viz_longitudinal
+   :members:
+   :undoc-members:
+
+.. automodule:: digimuh.viz_temporal
+   :members:
+   :undoc-members:
+
+.. automodule:: digimuh.viz_annual_yield
+   :members:
+   :undoc-members:
+
+.. automodule:: digimuh.viz_runner
+   :members:
+   :undoc-members:
+
+Pipelines & Orchestrators
+-------------------------
+
+.. automodule:: digimuh.run_frontiers_2026
+   :members:
+   :undoc-members:
+
+.. automodule:: digimuh.run_annual_yield
+   :members:
+   :undoc-members:
+
+.. automodule:: digimuh.milk_yield_classification
+   :members:
+   :undoc-members:
+
+Standalone Analyses
+-------------------
 
 .. automodule:: digimuh.analysis_01_ketosis
    :members:
    :undoc-members:
 
-Analysis 03 — Heat Stress
--------------------------
-
 .. automodule:: digimuh.analysis_03_heat_stress
    :members:
    :undoc-members:
-
-Analysis 06 — Digestive
------------------------
 
 .. automodule:: digimuh.analysis_06_digestive
    :members:
    :undoc-members:
 
-Analysis 11 — Circadian
------------------------
-
 .. automodule:: digimuh.analysis_11_circadian
    :members:
    :undoc-members:
-
-Analysis 12 — Motility Entropy
-------------------------------
 
 .. automodule:: digimuh.analysis_12_motility_entropy
    :members:
