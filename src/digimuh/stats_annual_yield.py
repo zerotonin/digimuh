@@ -111,12 +111,16 @@ def build_median_surface(
     doy_bin: int = DOY_BIN_DAYS,
     dim_bin: int = DIM_BIN_DAYS,
     min_cows: int = MIN_COWS_PER_CELL,
+    n_boot: int = 2000,
+    seed: int = 12345,
 ) -> pd.DataFrame:
     """Median-across-cows yield per (day-of-year bin × y bin) cell.
 
     Each cow contributes once per cell (her mean ``value_col`` in that
     cell), so cows with many days do not dominate; the cell value is the
-    median over those per-cow means — "the median cow's yield".
+    median over those per-cow means — "the median cow's yield".  A
+    bootstrap 95% CI of that median (resampling over cows) is attached so
+    the same surface can be drawn as a heatmap or as CI-banded line plots.
 
     Args:
         z_df: Output of :func:`compute_annual_zscores`.
@@ -125,10 +129,12 @@ def build_median_surface(
         doy_bin: Day-of-year bin width.
         dim_bin: DIM bin width (only used when ``y_col == "dim"``).
         min_cows: Cells with fewer backing cows are set NaN.
+        n_boot: Bootstrap resamples for the per-cell median CI.
+        seed: RNG seed (reproducible).
 
     Returns:
         Long-form DataFrame: ``doy_bin`` (left edge), ``y_bin``,
-        ``median_value``, ``n_cows``, ``n_obs``.
+        ``median_value``, ``ci_lo``, ``ci_hi``, ``n_cows``, ``n_obs``.
     """
     d = z_df.dropna(subset=[value_col, y_col]).copy()
     d["doy_bin"] = ((d["doy"] - 1) // doy_bin) * doy_bin + 1
@@ -140,18 +146,43 @@ def build_median_surface(
     else:
         raise ValueError(f"unsupported y_col {y_col!r}")
 
-    # 1. per-cow mean within each cell, 2. median across cows.
+    # 1. per-cow mean within each cell, 2. median across cows (+ boot CI).
     per_cow = (d.groupby(["doy_bin", "y_bin", "animal_id"])[value_col]
                  .mean().reset_index())
-    grid = (per_cow.groupby(["doy_bin", "y_bin"])
-                   .agg(median_value=(value_col, "median"),
-                        n_cows=("animal_id", "nunique"))
-                   .reset_index())
+    rng = np.random.default_rng(seed)
+    records: list[dict] = []
+    for (doy_b, y_b), g in per_cow.groupby(["doy_bin", "y_bin"]):
+        vals = g[value_col].to_numpy()
+        lo, hi = _median_ci(vals, n_boot, rng)
+        records.append({"doy_bin": int(doy_b), "y_bin": int(y_b),
+                        "median_value": float(np.median(vals)),
+                        "ci_lo": lo, "ci_hi": hi,
+                        "n_cows": int(g["animal_id"].nunique())})
+    grid = pd.DataFrame.from_records(records)
     n_obs = (d.groupby(["doy_bin", "y_bin"]).size()
                .rename("n_obs").reset_index())
     grid = grid.merge(n_obs, on=["doy_bin", "y_bin"], how="left")
-    grid.loc[grid["n_cows"] < min_cows, "median_value"] = np.nan
+    grid.loc[grid["n_cows"] < min_cows,
+             ["median_value", "ci_lo", "ci_hi"]] = np.nan
     return grid.sort_values(["y_bin", "doy_bin"]).reset_index(drop=True)
+
+
+def _median_ci(
+    values: np.ndarray,
+    n_boot: int,
+    rng: np.random.Generator,
+    alpha: float = 0.05,
+) -> tuple[float, float]:
+    """Bootstrap ``(1-alpha)`` CI of the median over ``values``."""
+    x = np.asarray(values, dtype=float)
+    x = x[~np.isnan(x)]
+    if x.size == 0:
+        return (np.nan, np.nan)
+    if x.size == 1:
+        return (float(x[0]), float(x[0]))
+    boot = np.median(x[rng.integers(0, x.size, size=(n_boot, x.size))], axis=1)
+    return (float(np.percentile(boot, 100 * alpha / 2)),
+            float(np.percentile(boot, 100 * (1 - alpha / 2))))
 
 
 # ─────────────────────────────────────────────────────────────

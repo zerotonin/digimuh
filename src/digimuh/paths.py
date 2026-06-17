@@ -166,6 +166,7 @@ _PREFIX_RULES: tuple[tuple[str, str], ...] = (
     ("breakpoint_stability_",    "longitudinal"),
 
     # annual yield
+    ("lines_yield_",             "annual"),
     ("heatmap_yield_",           "annual"),
     ("heatstress_duration_",     "annual"),
 )

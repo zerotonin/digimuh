@@ -28,15 +28,15 @@ from digimuh.stats_annual_yield import (
     test_duration_medians,
 )
 from digimuh.stats_lactation_curve import load_calvings
-from digimuh.viz_annual_yield import plot_heatstress_duration, plot_yield_heatmap
+from digimuh.viz_annual_yield import plot_heatstress_duration, plot_yield_lines
 
 log = logging.getLogger("digimuh.annual_yield")
 
 _SURFACES = (
-    ("lactation_nr", "z_yield",        "z",  "lactation", "heatmap_yield_z_lactation"),
-    ("lactation_nr", "daily_yield_kg", "kg", "lactation", "heatmap_yield_kg_lactation"),
-    ("dim",          "z_yield",        "z",  "dim",       "heatmap_yield_z_dim"),
-    ("dim",          "daily_yield_kg", "kg", "dim",       "heatmap_yield_kg_dim"),
+    ("lactation_nr", "z_yield",        "z",  "lactation", "lines_yield_z_lactation"),
+    ("lactation_nr", "daily_yield_kg", "kg", "lactation", "lines_yield_kg_lactation"),
+    ("dim",          "z_yield",        "z",  "dim",       "lines_yield_z_dim"),
+    ("dim",          "daily_yield_kg", "kg", "dim",       "lines_yield_kg_dim"),
 )
 
 
@@ -69,11 +69,11 @@ def main() -> None:
     kv("cow-years", z_df.groupby(["animal_id", "year"]).ngroups)
 
     # ── analysis 2: median surfaces ───────────────────────
-    section("2 · median-cow yield surfaces")
+    section("2 · median-cow yield lines")
     for y_col, value_col, kind, y_kind, name in _SURFACES:
         grid = build_median_surface(z_df, y_col=y_col, value_col=value_col)
-        plot_yield_heatmap(grid, value_kind=kind, y_kind=y_kind,
-                           name=name, out_dir=data_dir)
+        plot_yield_lines(grid, value_kind=kind, y_kind=y_kind,
+                         name=name, out_dir=data_dir)
         kv(name, f"{grid['median_value'].notna().sum()} cells")
 
     # ── analysis 3: heat-stress duration response ─────────

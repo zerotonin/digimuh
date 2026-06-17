@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 # ╔══════════════════════════════════════════════════════════════════╗
 # ║  DigiMuh — viz_annual_yield                                      ║
-# ║  « heatmaps of median yield + heat-stress duration response »    ║
+# ║  « yield-vs-month lines + heat-stress duration response »        ║
 # ╠══════════════════════════════════════════════════════════════════╣
-# ║  2-D heatmaps (day-of-year x lactation / DIM, colour = median    ║
-# ║  yield, z-scored and raw kg) plus the heat-stress duration       ║
-# ║  response figure (yield delta vs consecutive stress days).       ║
+# ║  Median-cow daily yield as line plots over the calendar year     ║
+# ║  (day-of-year x value, one line per lactation / DIM band, with   ║
+# ║  bootstrap 95% CI bands) plus the heat-stress duration response  ║
+# ║  figure (yield delta vs consecutive stress days).                ║
 # ║                                                                  ║
 # ║  SVG + PNG via viz_base.save_figure; CSV companions alongside.   ║
 # ╚══════════════════════════════════════════════════════════════════╝
-"""Heatmaps and the heat-stress duration-response figure."""
+"""Year-round yield line plots and the heat-stress duration-response figure."""
 
 from __future__ import annotations
 
@@ -17,10 +18,19 @@ import calendar
 import logging
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
-from digimuh.constants import WONG_BLUE, WONG_GREY, WONG_SKY, WONG_VERMILLION
+from digimuh.constants import (
+    WONG_BLUE,
+    WONG_GREEN,
+    WONG_GREY,
+    WONG_ORANGE,
+    WONG_PINK,
+    WONG_SKY,
+    WONG_VERMILLION,
+    WONG_YELLOW,
+)
+from digimuh.stats_annual_yield import LACTATION_CAP
 from digimuh.viz_base import save_figure, setup_figure
 
 log = logging.getLogger("digimuh.viz.annual_yield")
@@ -28,71 +38,105 @@ log = logging.getLogger("digimuh.viz.annual_yield")
 _MONTH_STARTS = [pd.Timestamp(2023, m, 1).dayofyear for m in range(1, 13)]
 _MONTH_LABELS = [calendar.month_abbr[m] for m in range(1, 13)]
 
+# Discrete line colours for the lactation bands (Wong, ordered L1…L8+).
+_LACTATION_COLOURS = (
+    WONG_BLUE, WONG_ORANGE, WONG_GREEN, WONG_VERMILLION,
+    WONG_SKY, WONG_PINK, WONG_YELLOW, WONG_GREY,
+)
+
 
 # ─────────────────────────────────────────────────────────────
-#  « Median-yield heatmaps »
+#  « Median-yield line plots (CI bands) »
 # ─────────────────────────────────────────────────────────────
 
-def plot_yield_heatmap(
+def plot_yield_lines(
     grid: pd.DataFrame,
     value_kind: str,
     y_kind: str,
     name: str,
     out_dir: Path,
 ) -> None:
-    """Render one median-yield heatmap (day-of-year × lactation/DIM).
+    """Median-cow yield over the year as CI-banded lines per band.
+
+    One line per y-band (median yield vs day-of-year) with a bootstrap
+    95% CI ribbon.  Lactation bands get the discrete Wong palette and a
+    legend; DIM bands get a viridis gradient and a colourbar (too many
+    bands for a legend).
 
     Args:
         grid: Long-form grid from
             :func:`stats_annual_yield.build_median_surface`
-            (``doy_bin``, ``y_bin``, ``median_value``, ``n_cows``).
-        value_kind: ``"z"`` (diverging, centred on 0) or
-            ``"kg"`` (sequential).
-        y_kind: ``"lactation"`` or ``"dim"`` — sets the y-axis label.
+            (``doy_bin``, ``y_bin``, ``median_value``, ``ci_lo``,
+            ``ci_hi``, ``n_cows``).
+        value_kind: ``"z"`` (z-scored, zero reference line) or
+            ``"kg"`` (raw kg).
+        y_kind: ``"lactation"`` or ``"dim"`` — sets band colouring.
         name: Output stem (also the CSV companion stem).
         out_dir: Results directory (routed to ``07_annual_yield``).
     """
+    import matplotlib as mpl
     import matplotlib.pyplot as plt
 
     setup_figure()
-    mat = grid.pivot(index="y_bin", columns="doy_bin", values="median_value")
-    mat = mat.sort_index()
-    x = mat.columns.to_numpy(dtype=float)
-    y = mat.index.to_numpy(dtype=float)
-
+    fig, ax = plt.subplots(figsize=(10, 5.5))
     if value_kind == "z":
-        vmax = float(np.nanpercentile(np.abs(mat.to_numpy()), 98))
-        cmap, vmin, vctr = "RdBu_r", -vmax, 0.0
-        cbar_label = "median z-scored daily yield"
-    else:
-        vmin = float(np.nanpercentile(mat.to_numpy(), 2))
-        vmax = float(np.nanpercentile(mat.to_numpy(), 98))
-        cmap, vctr = "viridis", None
-        cbar_label = "median daily yield (kg)"
+        ax.axhline(0.0, color=WONG_GREY, lw=1.0, ls="--", zorder=1)
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    norm = (plt.matplotlib.colors.TwoSlopeNorm(vmin=vmin, vcenter=vctr, vmax=vmax)
-            if vctr is not None else
-            plt.matplotlib.colors.Normalize(vmin=vmin, vmax=vmax))
-    mesh = ax.pcolormesh(x, y, mat.to_numpy(), cmap=cmap, norm=norm,
-                         shading="nearest")
-    cbar = fig.colorbar(mesh, ax=ax, pad=0.02)
-    cbar.set_label(cbar_label)
+    y_bins = sorted(int(v) for v in grid["y_bin"].dropna().unique())
+
+    if y_kind == "lactation":
+        for i, yb in enumerate(y_bins):
+            sub = _band(grid, yb)
+            if sub.empty:
+                continue
+            colour = _LACTATION_COLOURS[i % len(_LACTATION_COLOURS)]
+            label = f"L{yb}+" if yb >= LACTATION_CAP else f"L{yb}"
+            _draw_band(ax, sub, colour, label, ci_alpha=0.18, lw=1.8)
+        ax.legend(title="lactation", frameon=False, ncol=2, fontsize=8,
+                  loc="best")
+    else:
+        cmap = plt.get_cmap("viridis")
+        norm = mpl.colors.Normalize(vmin=min(y_bins), vmax=max(y_bins))
+        for yb in y_bins:
+            sub = _band(grid, yb)
+            if sub.empty:
+                continue
+            _draw_band(ax, sub, cmap(norm(yb)), None, ci_alpha=0.10, lw=1.4)
+        sm = mpl.cm.ScalarMappable(norm=norm, cmap=cmap)
+        sm.set_array([])
+        fig.colorbar(sm, ax=ax, pad=0.02).set_label("days in milk (DIM)")
 
     ax.set_xticks(_MONTH_STARTS)
     ax.set_xticklabels(_MONTH_LABELS)
+    ax.set_xlim(1, 366)
     ax.set_xlabel("month of year")
-    if y_kind == "lactation":
-        ax.set_ylabel("lactation number")
-        ax.set_yticks(sorted(int(v) for v in y))
-    else:
-        ax.set_ylabel("days in milk (DIM)")
-    ax.set_title("Median-cow daily milk yield")
+    ax.set_ylabel("median z-scored daily yield" if value_kind == "z"
+                  else "median daily yield (kg)")
+    ax.set_title("Median-cow daily milk yield over the year")
 
     fig.tight_layout()
     save_figure(fig, name, out_dir)
     _write_csv(grid, name, out_dir)
-    log.info("wrote heatmap %s", name)
+    log.info("wrote yield-line figure %s", name)
+
+
+def _band(grid: pd.DataFrame, y_bin: int) -> pd.DataFrame:
+    """One y-band's cells, ordered by day-of-year, valid medians only."""
+    return (grid[grid["y_bin"] == y_bin]
+            .dropna(subset=["median_value"])
+            .sort_values("doy_bin"))
+
+
+def _draw_band(ax, sub: pd.DataFrame, colour, label: str | None,
+               ci_alpha: float, lw: float) -> None:
+    """Plot one band's median line plus its 95% CI ribbon."""
+    has_ci = sub[["ci_lo", "ci_hi"]].notna().all(axis=1)
+    if has_ci.any():
+        s = sub[has_ci]
+        ax.fill_between(s["doy_bin"], s["ci_lo"], s["ci_hi"],
+                        color=colour, alpha=ci_alpha, lw=0, zorder=2)
+    ax.plot(sub["doy_bin"], sub["median_value"], color=colour, lw=lw,
+            label=label, zorder=4)
 
 
 # ─────────────────────────────────────────────────────────────
