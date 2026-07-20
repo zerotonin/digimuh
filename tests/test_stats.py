@@ -232,16 +232,22 @@ def test_milk_composition_screens_report_corrected_p():
     assert (fin["p_fdr"] >= fin["p"] - 1e-12).all()
 
 
-def test_longitudinal_change_from_baseline_is_fdr_corrected():
+def test_longitudinal_change_from_baseline_is_fdr_corrected(caplog):
     """The change-from-first-year block must be BH-corrected, not raw.
 
     It used to print one raw p-value per year directly beneath a table that
     *was* corrected, so both read as adjusted.  Feeds deterministic p-values
     through the resampling test and checks the reported value is the BH
     transform, not the input.
+
+    Both output backends are captured: ``console.result_table`` renders through
+    rich when it is installed and falls back to ``log.info`` when it is not, so
+    a stdout-only capture passes locally and sees nothing on a runner without
+    the optional dependency.
     """
     import contextlib
     import io
+    import logging
     from pathlib import Path
 
     import numpy as np
@@ -275,9 +281,9 @@ def test_longitudinal_change_from_baseline_is_fdr_corrected():
             for year in (2021, 2022, 2023, 2024)
         ])
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
+        with caplog.at_level(logging.INFO), contextlib.redirect_stdout(buf):
             sl._run_longitudinal_tests(bs, Path("."))
-        out = buf.getvalue()
+        out = buf.getvalue() + "\n".join(r.getMessage() for r in caplog.records)
     finally:
         rerandomstats.FisherResamplingTest = original
 
