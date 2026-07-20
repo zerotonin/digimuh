@@ -202,9 +202,9 @@ def plot_tnf_yield_by_class(
                         "--", color="#333", linewidth=1.6)
 
                 rs = float(stat["rs"].iloc[0])
-                p  = float(stat["p"].iloc[0])
+                p  = float(stat["p_fdr"].iloc[0])
                 anno = (f"rs = {rs:+.3f}\n"
-                        f"p = {p:.2e}\n"
+                        f"p(FDR) = {p:.2e}\n"
                         f"n = {int(stat['n'].iloc[0]):,} cow-days\n"
                         f"animals = {n_animals}")
                 ax.text(0.02, 0.97, anno, transform=ax.transAxes,
@@ -368,7 +368,7 @@ def plot_crossing_day_raincloud(
         # Annotation from the comparison table
         stat = comparison[(comparison["group"] == group)
                           & (comparison["predictor"] == pred_short)]
-        if not stat.empty and np.isfinite(stat["p"].iloc[0]):
+        if not stat.empty and np.isfinite(stat["p_fdr"].iloc[0]):
             s = stat.iloc[0]
             from digimuh.stats_core import p_to_stars
             anno = (f"Crossed  n = {int(s['n_yes']):,}  "
@@ -376,8 +376,8 @@ def plot_crossing_day_raincloud(
                     f"Not crossed  n = {int(s['n_no']):,}  "
                     f"median = {s['median_no']:+.2f}\n"
                     f"Δ median = {s['median_diff']:+.2f} kg/d  "
-                    f"(Mann-Whitney p = {s['p']:.2e} "
-                    f"{p_to_stars(s['p'])})")
+                    f"(Mann-Whitney p(FDR) = {s['p_fdr']:.2e} "
+                    f"{p_to_stars(s['p_fdr'])})")
             ax.text(0.02, 0.97, anno, transform=ax.transAxes,
                     va="top", ha="left", fontsize=9, color="#222",
                     bbox=dict(boxstyle="round,pad=0.35",
@@ -466,7 +466,7 @@ def plot_daily_climate_vs_yield(
                     label=f"OLS slope = {s['slope']:+.3f}")
             from digimuh.stats_core import p_to_stars
             anno = (f"rs = {s['rs']:+.3f}\n"
-                    f"p = {s['p']:.2e} {p_to_stars(s['p'])}\n"
+                    f"p(FDR) = {s['p_fdr']:.2e} {p_to_stars(s['p_fdr'])}\n"
                     f"n = {int(s['n']):,} cow-days\n"
                     f"animals = {int(s['n_animals'])}")
             ax.text(0.02, 0.97, anno, transform=ax.transAxes,

@@ -731,15 +731,15 @@ def _run_stratified_tnf(
                     cls, pred,
                     int(s["n"]), int(s["n_animals"]),
                     f"{s['rs']:+.3f}" if np.isfinite(s["rs"]) else "—",
-                    f"{s['p']:.2e}" if np.isfinite(s["p"]) else "—",
-                    (stars_styled(p_to_stars(s["p"]))
-                     if np.isfinite(s["p"]) else ""),
+                    f"{s['p_fdr']:.2e}" if np.isfinite(s["p_fdr"]) else "—",
+                    (stars_styled(p_to_stars(s["p_fdr"]))
+                     if np.isfinite(s["p_fdr"]) else ""),
                     f"{s['slope']:+.2f}" if np.isfinite(s["slope"]) else "—",
                 ])
         result_table(
             f"TNF × {resp_label} by class",
             ["Class", "Predictor", "n days", "n cows",
-             "rs", "p", "Sig.", f"Slope ({slope_unit})"],
+             "rs", "p (FDR)", "Sig.", f"Slope ({slope_unit})"],
             rows,
         )
 
@@ -817,7 +817,7 @@ def _run_crossing_and_climate_analyses(
             "Mann-Whitney median-difference test per climate predictor")
     rows = []
     for _, r in comparison.iterrows():
-        if not np.isfinite(r["p"]):
+        if not np.isfinite(r["p_fdr"]):
             continue
         rows.append([
             r["group"], r["predictor"],
@@ -825,8 +825,8 @@ def _run_crossing_and_climate_analyses(
             f"{r['median_yes']:+.2f}",
             f"{r['median_no']:+.2f}",
             f"{r['median_diff']:+.2f}",
-            f"{r['p']:.2e}",
-            stars_styled(p_to_stars(r["p"])),
+            f"{r['p_fdr']:.2e}",
+            stars_styled(p_to_stars(r["p_fdr"])),
         ])
     if rows:
         result_table(
@@ -858,15 +858,15 @@ def _run_crossing_and_climate_analyses(
             crows.append([
                 r["predictor"],
                 int(r["n"]), int(r["n_animals"]),
-                f"{r['rs']:+.3f}", f"{r['p']:.2e}",
-                stars_styled(p_to_stars(r["p"])),
+                f"{r['rs']:+.3f}", f"{r['p_fdr']:.2e}",
+                stars_styled(p_to_stars(r["p_fdr"])),
                 f"{r['slope']:+.3f}",
             ])
         if crows:
             result_table(
                 "Daily mean × residual",
                 ["Predictor", "n days", "n cows",
-                 "rs", "p", "Sig.", "Slope (kg/d per unit)"],
+                 "rs", "p (FDR)", "Sig.", "Slope (kg/d per unit)"],
                 crows,
             )
 
@@ -966,15 +966,15 @@ def _run_milk_composition_analysis(
                     group, resp_label, unit,
                     int(s["n"]), int(s["n_animals"]),
                     f"{s['rs']:+.3f}",
-                    f"{s['p']:.2e}",
-                    stars_styled(p_to_stars(s["p"])),
+                    f"{s['p_fdr']:.2e}",
+                    stars_styled(p_to_stars(s["p_fdr"])),
                     f"{s['slope']:+.4f}",
                 ])
         if rows:
             result_table(
                 f"Predictor: {pred_label}",
                 ["Class", "MLP metric", "Unit", "n days", "n cows",
-                 "rs", "p", "Sig.", "Slope (metric per unit)"],
+                 "rs", "p (FDR)", "Sig.", "Slope (metric per unit)"],
                 rows,
             )
 
@@ -1015,14 +1015,14 @@ def _run_milk_composition_analysis(
                 comp.replace("_", " "),
                 int(s["n"]),
                 f"{s['rs']:+.3f}",
-                f"{s['p']:.2e}",
-                stars_styled(p_to_stars(s["p"])),
+                f"{s['p_fdr']:.2e}",
+                stars_styled(p_to_stars(s["p_fdr"])),
                 f"{s['slope']:+.4f}",
             ])
     if rows:
         result_table(
             "Dilution partition (vs mean barn THI)",
-            ["Nutrient", "Component", "n", "rs", "p", "Sig.",
+            ["Nutrient", "Component", "n", "rs", "p (FDR)", "Sig.",
              "Slope (%/unit THI)"],
             rows,
         )

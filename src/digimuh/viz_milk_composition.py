@@ -65,9 +65,9 @@ def _spearman_annotation(ax, corr_row, xl, fit_colour):
             label=f"OLS slope = {slope:+.3f}")
     from digimuh.stats_core import p_to_stars
     rs = float(row["rs"])
-    p  = float(row["p"])
+    p  = float(row["p_fdr"])
     anno = (f"rs = {rs:+.3f}\n"
-            f"p = {p:.2e} {p_to_stars(p)}\n"
+            f"p(FDR) = {p:.2e} {p_to_stars(p)}\n"
             f"n = {int(row['n']):,} test-days\n"
             f"animals = {int(row['n_animals'])}")
     ax.text(0.02, 0.97, anno, transform=ax.transAxes,
@@ -208,7 +208,7 @@ def plot_dilution_partition(
             ax.plot(xl, s["intercept"] + s["slope"] * xl,
                     linestyle=linestyle, linewidth=2, color=colour,
                     label=(f"{comp_label} — "
-                           f"rs={s['rs']:+.3f}{p_to_stars(s['p'])}, "
+                           f"rs={s['rs']:+.3f}{p_to_stars(s['p_fdr'])}, "
                            f"slope={s['slope']:+.4f}"))
 
         # Rumen residual curve as a lighter scatter so the reader can see
@@ -256,7 +256,7 @@ def plot_composition_heatmap(
         index="response", columns="group", values="rs",
     ).reindex(columns=present_classes)
     pivot_p = sub.pivot_table(
-        index="response", columns="group", values="p",
+        index="response", columns="group", values="p_fdr",
     ).reindex(columns=present_classes)
     pivot_label = sub.drop_duplicates(
         subset="response").set_index("response")["response_label"]
