@@ -28,13 +28,13 @@ pattern: *"give me all X for animal Y between dates A and B"*.
 Usage::
 
     # Smoke test — first 5 files per folder
-    python -m digimuh.ingest_cow_db /path/to/csv/root --db cow.db --test-n 5
+    digimuh-ingest /path/to/csv/root --db cow.db --test-n 5
 
     # Full ingestion (~2–3 h depending on disk I/O)
-    python -m digimuh.ingest_cow_db /path/to/csv/root --db cow.db
+    digimuh-ingest /path/to/csv/root --db cow.db
 
     # Verbose mode — prints CREATE TABLE SQL for each table
-    python -m digimuh.ingest_cow_db /path/to/csv/root --db cow.db -v
+    digimuh-ingest /path/to/csv/root --db cow.db -v
 
 Dependencies:
     * Python ≥ 3.10 (for ``X | Y`` union type hints)
@@ -43,9 +43,6 @@ Dependencies:
 See Also:
     * ``docs/database_structure.md`` — full schema documentation
     * ``docs/column_dictionary.md`` — column-level data dictionary
-
-Authors:
-    Bart R. H. Geurten, Claude (Anthropic)
 """
 
 # ─────────────────────────────────────────────────────────────────
