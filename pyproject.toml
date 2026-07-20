@@ -58,6 +58,13 @@ dev = [
     "scikit-learn",
     "rerandomstats >= 0.2.0",
     "ruff >= 0.4",
+    # Runtime deps the analysis path actually uses.  Without these the test
+    # run silently exercises import-error fallbacks instead of the code a
+    # user runs — console output goes to logging rather than rich, and the
+    # config loader and spreadsheet reader are never touched at all.
+    "rich",
+    "pyyaml",
+    "openpyxl",
 ]
 progress = [
     "tqdm",
