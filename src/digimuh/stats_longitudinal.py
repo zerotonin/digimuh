@@ -545,18 +545,37 @@ def _run_longitudinal_tests(bs: pd.DataFrame, d: Path) -> None:
                 test_rows,
             )
 
-        # Relative change from first year: test if different from 0
-        for year in years[1:]:  # skip first year (change = 0)
+        # Relative change from the first year: is the median change != 0?
+        # These form their own BH family, one test per year, corrected exactly
+        # as the pairwise block above is.  Leaving them raw beside a corrected
+        # table would read as though both had been adjusted.  They are kept
+        # separate from the pairwise family because they answer a different
+        # question -- drift from baseline, not year-A-versus-year-B.
+        change_rows: list[list] = []
+        change_ps: list[float] = []
+        for year in years[1:]:  # skip the first year (change = 0 by definition)
             changes = repeat[repeat["year"] == year]["bp_change"].dropna()
-            if len(changes) >= 5:
-                # Test median change vs zero
-                p = FisherResamplingTest(
-                    data_a=changes.tolist(),
-                    data_b=[0.0] * len(changes),
-                    func="medianDiff", combination_n=20_000,
-                ).main()
-                kv(f"{label} {year} change from baseline",
-                   f"median = {changes.median():.1f}, p = {p:.4f} {p_to_stars(p)}")
+            if len(changes) < 5:
+                continue
+            p = FisherResamplingTest(
+                data_a=changes.tolist(),
+                data_b=[0.0] * len(changes),
+                func="medianDiff", combination_n=20_000,
+            ).main()
+            change_rows.append([str(year), len(changes),
+                                f"{changes.median():+.1f}", "", ""])
+            change_ps.append(p)
+
+        if change_rows:
+            adj_ps = correct_pvalues_array(np.array(change_ps), method="fdr_bh")
+            for r, adj_p in zip(change_rows, adj_ps):
+                r[3] = f"{adj_p:.4f}"
+                r[4] = stars_styled(p_to_stars(adj_p))
+            result_table(
+                f"{label} breakpoints: change from first year (BH-FDR)",
+                ["Year", "n animals", "Median change", "p adj", "Sig."],
+                change_rows,
+            )
 
     # Save longitudinal test results alongside stability
     log.info("  Longitudinal tests complete.")
