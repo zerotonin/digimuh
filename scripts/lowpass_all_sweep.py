@@ -26,7 +26,7 @@ from rerandomstats import broken_stick_fit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _fitreport import format_failures, report, tally  # noqa: E402
-from _sweep_common import TAU_GRID_LOG, progress  # noqa: E402
+from _sweep_common import TAU_GRID_LOG, hourly_mean, progress  # noqa: E402
 
 log = logging.getLogger("lowpass_all")
 
@@ -39,18 +39,23 @@ INDICES = ["THI_NRC1971", "BGHI", "HLI", "ETI", "THI_adj", "CCI", "ETIC",
 
 _SERIES: dict[str, np.ndarray] = {}
 _DT = None
-_ANIMAL_YEARS: list[tuple[np.ndarray, np.ndarray]] = []
-_ALL_POS = None
+_POS = _GCODE = _COUNTS = _BODY = None
+_ANIMAL_YEARS: list[np.ndarray] = []
 
 
 def _fit(series):
-    """Median R², % converged, and a tally of fits that raised."""
-    xr = (float(np.percentile(series[_ALL_POS], X_LO)),
-          float(np.percentile(series[_ALL_POS], X_HI)))
+    """Median R², % converged, and a tally of fits that raised.
+
+    ``series`` arrives at station resolution and is averaged onto the same
+    hourly grid as the rumen response before fitting, so predictor and
+    response are aggregated identically.
+    """
+    x = hourly_mean(series, _POS, _GCODE, _COUNTS)
+    xr = (float(np.percentile(x, X_LO)), float(np.percentile(x, X_HI)))
     r2, conv, failures = [], 0, Counter()
-    for pos, y in _ANIMAL_YEARS:
+    for gidx in _ANIMAL_YEARS:
         try:
-            fit = broken_stick_fit(series[pos], y, x_range=xr)
+            fit = broken_stick_fit(x[gidx], _BODY[gidx], x_range=xr)
         except Exception as exc:
             tally(failures, exc)
             continue
@@ -72,10 +77,12 @@ def sweep_tau(tau):
     return row
 
 
-def _init(series, dt, animal_years, all_pos) -> None:
+def _init(series, dt, pos, gcode, counts, body, animal_years) -> None:
     """Publish the read-only sweep state into this process's globals."""
-    global _SERIES, _DT, _ANIMAL_YEARS, _ALL_POS
-    _SERIES, _DT, _ANIMAL_YEARS, _ALL_POS = series, dt, animal_years, all_pos
+    global _SERIES, _DT, _POS, _GCODE, _COUNTS, _BODY, _ANIMAL_YEARS
+    _SERIES, _DT = series, dt
+    _POS, _GCODE, _COUNTS, _BODY = pos, gcode, counts, body
+    _ANIMAL_YEARS = animal_years
 
 
 def prepare(indices_csv, rumen_csv):
@@ -98,16 +105,28 @@ def prepare(indices_csv, rumen_csv):
                            tolerance=pd.Timedelta(minutes=10)).dropna(subset=["pos"])
     merged["pos"] = merged["pos"].astype(int)
     merged["hour"] = merged["timestamp"].dt.floor("h")
-    hourly = (merged.groupby(["animal_id", "year", "date_enter", "hour"])
-              .agg(body_temp=("body_temp", "mean"), pos=("pos", "median"))
+
+    # Both axes are averaged over the same hourly bins; sampling the driver at
+    # one instant would leave it noisier than the response it is fitted to.
+    keys = ["animal_id", "year", "date_enter", "hour"]
+    merged = merged.sort_values(keys).reset_index(drop=True)
+    gcode, _ = pd.factorize(pd.MultiIndex.from_frame(merged[keys]), sort=True)
+    merged["gcode"] = gcode
+    counts = np.bincount(gcode).astype(float)
+    pos = merged["pos"].to_numpy()
+
+    hourly = (merged.groupby("gcode")
+              .agg(body_temp=("body_temp", "mean"),
+                   animal_id=("animal_id", "first"), year=("year", "first"),
+                   date_enter=("date_enter", "first"))
               .reset_index())
-    hourly["pos"] = hourly["pos"].round().astype(int)
-    animal_years = [(g["pos"].to_numpy(), g["body_temp"].to_numpy())
+    body = hourly["body_temp"].to_numpy()
+    animal_years = [g.index.to_numpy()
                     for _, g in hourly.groupby(["animal_id", "year", "date_enter"])
                     if len(g) >= MIN_HOURS]
-    all_pos = hourly["pos"].to_numpy()
-    log.info("%d hourly points; %d animal-years", len(hourly), len(animal_years))
-    return series, dt, animal_years, all_pos
+    log.info("%d readings -> %d hourly points (%.1f per hour); %d animal-years",
+             len(merged), len(hourly), counts.mean(), len(animal_years))
+    return series, dt, pos, gcode, counts, body, animal_years
 
 
 def best_table(sweep: pd.DataFrame) -> pd.DataFrame:

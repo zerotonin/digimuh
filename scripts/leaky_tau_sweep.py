@@ -40,7 +40,7 @@ from rerandomstats import broken_stick_fit, hill_fit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _fitreport import format_failures, report, tally  # noqa: E402
-from _sweep_common import TAU_GRIDS, progress  # noqa: E402
+from _sweep_common import TAU_GRIDS, hourly_mean, progress  # noqa: E402
 
 LENSES = {"bs": broken_stick_fit, "hill": hill_fit}
 SERIES_NAMES = ["THI", "ITSC", "TSD", "TSL"]
@@ -54,19 +54,19 @@ X_LO, X_HI = 5.0, 95.0
 # Read-only globals shared with worker processes (via fork, no pickling).
 _THI = _ITSC = _DT = None
 _ITSC_BASE = 0.0
-_ANIMAL_YEARS: list[tuple[np.ndarray, np.ndarray]] = []
-_ALL_POS = None
+_POS = _GCODE = _COUNTS = _BODY = None
+_ANIMAL_YEARS: list[np.ndarray] = []
 _T_HOURS = _CUM_LOAD = _CUM_OVER = None   # for windowed TSD / TSL
 
 
-def _init_globals(thi, itsc, dt, itsc_base, animal_years, all_pos,
-                  t_hours, cum_load, cum_over) -> None:
-    global _THI, _ITSC, _DT, _ITSC_BASE, _ANIMAL_YEARS, _ALL_POS
-    global _T_HOURS, _CUM_LOAD, _CUM_OVER
+def _init_globals(thi, itsc, dt, itsc_base, pos, gcode, counts, body,
+                  animal_years, t_hours, cum_load, cum_over) -> None:
+    global _THI, _ITSC, _DT, _ITSC_BASE, _ANIMAL_YEARS
+    global _POS, _GCODE, _COUNTS, _BODY, _T_HOURS, _CUM_LOAD, _CUM_OVER
     _THI, _ITSC, _DT = thi, itsc, dt
     _ITSC_BASE = itsc_base
+    _POS, _GCODE, _COUNTS, _BODY = pos, gcode, counts, body
     _ANIMAL_YEARS = animal_years
-    _ALL_POS = all_pos
     _T_HOURS, _CUM_LOAD, _CUM_OVER = t_hours, cum_load, cum_over
 
 
@@ -82,12 +82,16 @@ def _trailing(cum: np.ndarray, w: float) -> np.ndarray:
 
 
 def _fit_series(series: np.ndarray) -> dict:
-    """Median R², % converged, and raised-fit tally per lens for one series."""
-    xr = (float(np.percentile(series[_ALL_POS], X_LO)),
-          float(np.percentile(series[_ALL_POS], X_HI)))
+    """Median R², % converged, and raised-fit tally per lens for one series.
+
+    The driver is averaged onto the response's hourly grid before fitting, so
+    both axes are aggregated identically.
+    """
+    xh = hourly_mean(series, _POS, _GCODE, _COUNTS)
+    xr = (float(np.percentile(xh, X_LO)), float(np.percentile(xh, X_HI)))
     acc = {lens: {"r2": [], "conv": 0, "fail": Counter()} for lens in LENSES}
-    for pos, y in _ANIMAL_YEARS:
-        x = series[pos]
+    for gidx in _ANIMAL_YEARS:
+        x, y = xh[gidx], _BODY[gidx]
         for lens, fit_fn in LENSES.items():
             try:
                 fit = fit_fn(x, y, x_range=xr)
@@ -160,25 +164,29 @@ def prepare(indices_csv: Path, rumen_csv: Path):
     merged["hobo_pos"] = merged["hobo_pos"].astype(int)
 
     # Aggregate to hourly per animal-year: 5-min rumen temp is heavily
-    # autocorrelated, and hourly keeps the Hill fits tractable. Each hour keeps
-    # its mean body temp and a representative station position (memory is smooth
-    # within the hour).
+    # autocorrelated, and hourly keeps the Hill fits tractable.  Each hour
+    # carries the mean body temperature and, symmetrically, the mean driver
+    # over the same readings.
     merged["hour"] = merged["timestamp"].dt.floor("h")
-    hourly = (merged.groupby(["animal_id", "year", "date_enter", "hour"])
-              .agg(body_temp=("body_temp", "mean"),
-                   hobo_pos=("hobo_pos", "median"))
-              .reset_index())
-    hourly["hobo_pos"] = hourly["hobo_pos"].round().astype(int)
 
-    animal_years = []
-    for _, grp in hourly.groupby(["animal_id", "year", "date_enter"]):
-        if len(grp) >= MIN_READINGS:
-            animal_years.append((grp["hobo_pos"].to_numpy(),
-                                 grp["body_temp"].to_numpy()))
-    all_pos = hourly["hobo_pos"].to_numpy()
+    # Both axes averaged over the same hourly bins (see _sweep_common).
+    keys = ["animal_id", "year", "date_enter", "hour"]
+    merged = merged.sort_values(keys).reset_index(drop=True)
+    gcode, _ = pd.factorize(pd.MultiIndex.from_frame(merged[keys]), sort=True)
+    merged["gcode"] = gcode
+    counts = np.bincount(gcode).astype(float)
+    hourly = (merged.groupby("gcode")
+              .agg(body_temp=("body_temp", "mean"),
+                   animal_id=("animal_id", "first"), year=("year", "first"),
+                   date_enter=("date_enter", "first"))
+              .reset_index())
+    animal_years = [g.index.to_numpy()
+                    for _, g in hourly.groupby(["animal_id", "year", "date_enter"])
+                    if len(g) >= MIN_READINGS]
     log.info("summer: %d 5-min -> %d hourly points; %d animal-years >= %d hours",
              len(merged), len(hourly), len(animal_years), MIN_READINGS)
-    return (thi, itsc, dt, itsc_base, animal_years, all_pos,
+    return (thi, itsc, dt, itsc_base, merged["hobo_pos"].to_numpy(), gcode,
+            counts, hourly["body_temp"].to_numpy(), animal_years,
             t_hours, cum_load, cum_over)
 
 

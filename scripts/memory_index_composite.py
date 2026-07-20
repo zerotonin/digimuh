@@ -28,7 +28,7 @@ from rerandomstats import broken_stick_fit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _fitreport import format_failures, report, tally  # noqa: E402
-from _sweep_common import TAU_GRID_LOG, progress  # noqa: E402
+from _sweep_common import TAU_GRID_LOG, hourly_mean, progress  # noqa: E402
 
 log = logging.getLogger("composite")
 
@@ -40,8 +40,8 @@ INSTANT = ["THI_NRC1971", "BGHI", "HLI", "ETI", "THI_adj", "CCI", "ETIC",
            "ITSC", "ESI", "air_temp"]
 
 _THI = _ITSC = _DT = _T_HOURS = _CUM_LOAD = _CUM_OVER = None
-_ANIMAL_YEARS: list[tuple[np.ndarray, np.ndarray]] = []
-_ALL_POS = None
+_POS = _GCODE = _COUNTS = _BODY = None
+_ANIMAL_YEARS: list[np.ndarray] = []
 
 
 def _trailing(cum, w):
@@ -50,13 +50,18 @@ def _trailing(cum, w):
 
 
 def _fit(series):
-    """Median R², % converged, and a tally of fits that raised."""
-    xr = (float(np.percentile(series[_ALL_POS], X_LO)),
-          float(np.percentile(series[_ALL_POS], X_HI)))
+    """Median R², % converged, and a tally of fits that raised.
+
+    ``series`` arrives at station resolution and is averaged onto the same
+    hourly grid as the rumen response before fitting, so predictor and
+    response are aggregated identically.
+    """
+    x = hourly_mean(series, _POS, _GCODE, _COUNTS)
+    xr = (float(np.percentile(x, X_LO)), float(np.percentile(x, X_HI)))
     r2, conv, failures = [], 0, Counter()
-    for pos, y in _ANIMAL_YEARS:
+    for gidx in _ANIMAL_YEARS:
         try:
-            fit = broken_stick_fit(series[pos], y, x_range=xr)
+            fit = broken_stick_fit(x[gidx], _BODY[gidx], x_range=xr)
         except Exception as exc:
             tally(failures, exc)
             continue
@@ -87,13 +92,15 @@ def sweep_tau(tau):
     return row
 
 
-def _init(thi, itsc, dt, t_hours, cum_load, cum_over, animal_years,
-          all_pos) -> None:
+def _init(thi, itsc, dt, t_hours, cum_load, cum_over, pos, gcode, counts,
+          body, animal_years) -> None:
     """Publish the read-only sweep state into this process's globals."""
-    global _THI, _ITSC, _DT, _T_HOURS, _CUM_LOAD, _CUM_OVER, _ANIMAL_YEARS, _ALL_POS
+    global _THI, _ITSC, _DT, _T_HOURS, _CUM_LOAD, _CUM_OVER
+    global _POS, _GCODE, _COUNTS, _BODY, _ANIMAL_YEARS
     _THI, _ITSC, _DT = thi, itsc, dt
     _T_HOURS, _CUM_LOAD, _CUM_OVER = t_hours, cum_load, cum_over
-    _ANIMAL_YEARS, _ALL_POS = animal_years, all_pos
+    _POS, _GCODE, _COUNTS, _BODY = pos, gcode, counts, body
+    _ANIMAL_YEARS = animal_years
 
 
 def prepare(indices_csv, rumen_csv):
@@ -125,19 +132,32 @@ def prepare(indices_csv, rumen_csv):
                            tolerance=pd.Timedelta(minutes=10)).dropna(subset=["pos"])
     merged["pos"] = merged["pos"].astype(int)
     merged["hour"] = merged["timestamp"].dt.floor("h")
-    agg = {"body_temp": ("body_temp", "mean"), "pos": ("pos", "median")}
-    agg.update({c: (c, "mean") for c in INSTANT})
-    hourly = (merged.groupby(["animal_id", "year", "date_enter", "hour"])
-              .agg(**agg).reset_index())
-    hourly["pos"] = hourly["pos"].round().astype(int)
-    animal_years = [(g["pos"].to_numpy(), g["body_temp"].to_numpy())
+
+    # Every driver is averaged over the readings inside each hour, exactly as
+    # the response is, rather than sampled at one instant.  gcode maps each
+    # 5-min reading to its hourly bin; counts is the bin size.
+    keys = ["animal_id", "year", "date_enter", "hour"]
+    merged = merged.sort_values(keys).reset_index(drop=True)
+    gcode, _ = pd.factorize(pd.MultiIndex.from_frame(merged[keys]), sort=True)
+    merged["gcode"] = gcode
+    counts = np.bincount(gcode).astype(float)
+    pos = merged["pos"].to_numpy()
+
+    hourly = (merged.groupby("gcode")
+              .agg(body_temp=("body_temp", "mean"),
+                   animal_id=("animal_id", "first"), year=("year", "first"),
+                   date_enter=("date_enter", "first"))
+              .reset_index())
+    body = hourly["body_temp"].to_numpy()
+    animal_years = [g.index.to_numpy()
                     for _, g in hourly.groupby(["animal_id", "year", "date_enter"])
                     if len(g) >= MIN_HOURS]
-    all_pos = hourly["pos"].to_numpy()
-    log.info("%d hourly points; %d animal-years", len(hourly), len(animal_years))
-    # instantaneous index series aligned to positions, for the categorical panel
+    log.info("%d readings -> %d hourly points (%.1f per hour); %d animal-years",
+             len(merged), len(hourly), counts.mean(), len(animal_years))
+
     inst_series = {c: idx[c].to_numpy() for c in INSTANT}
-    state = (thi, itsc, dt, t_hours, cum_load, cum_over, animal_years, all_pos)
+    state = (thi, itsc, dt, t_hours, cum_load, cum_over,
+             pos, gcode, counts, body, animal_years)
     return state, inst_series
 
 
