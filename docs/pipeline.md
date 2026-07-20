@@ -1,7 +1,6 @@
 # DigiMuh analysis pipeline
 
 **Version:** 0.1.0
-**Authors:** Bart R. H. Geurten, Claude (Anthropic)
 **Date:** March 2026
 
 
