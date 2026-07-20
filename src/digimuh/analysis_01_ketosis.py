@@ -136,15 +136,24 @@ def train_ketosis_classifier(df: pd.DataFrame, out_dir: Path) -> dict:
     indicator) and evaluates against disease records where
     available.
 
+    Cross-validation is grouped by ``animal_id``, so every test fold
+    contains only animals the model has never seen.  The scores are
+    therefore an estimate of generalisation to a *new cow*, which is
+    the question a herd manager actually asks — and they are lower
+    than a row-wise split would report, because that split lets the
+    model recognise the individual rather than the condition.
+
     Args:
         df: DataFrame from :func:`load_ketosis_data`.
         out_dir: Directory for saving results.
 
     Returns:
-        Dict with performance metrics and feature importances.
+        Dict with performance metrics (mean and SD across folds),
+        the CV scheme, and feature importances.
     """
     from sklearn.ensemble import RandomForestClassifier
-    from sklearn.model_selection import StratifiedKFold, cross_validate
+    from sklearn.model_selection import StratifiedGroupKFold, cross_validate
+    from sklearn.pipeline import Pipeline
     from sklearn.preprocessing import StandardScaler
 
     feature_cols = [
@@ -166,46 +175,63 @@ def train_ketosis_classifier(df: pd.DataFrame, out_dir: Path) -> dict:
 
     X = sub[available].values
     y = sub[target].values.astype(int)
+    groups = sub["animal_id"].values
+    n_animals = int(pd.Series(groups).nunique())
 
     log.info(
-        "Training RF classifier: %d samples, %d features, "
+        "Training RF classifier: %d cow-days from %d animals, %d features, "
         "%.1f%% positive",
-        len(y), len(available), 100 * y.mean(),
+        len(y), n_animals, len(available), 100 * y.mean(),
     )
 
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    # Scaling belongs inside the pipeline: fitting the scaler on all rows
+    # first would let each test fold see its own mean and variance.  Trees
+    # are scale-invariant so it changes nothing here, but the leak-free form
+    # is the one that stays correct if the estimator is ever swapped.
+    model = Pipeline([
+        ("scale", StandardScaler()),
+        ("rf", RandomForestClassifier(
+            n_estimators=200, max_depth=8, random_state=42,
+            class_weight="balanced")),
+    ])
 
-    clf = RandomForestClassifier(
-        n_estimators=200, max_depth=8, random_state=42,
-        class_weight="balanced",
-    )
-
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    # Split by ANIMAL, not by cow-day.  A cow contributes many days, and
+    # consecutive days from one cow share her rumination, yield and intake
+    # baseline; splitting rows at random puts day N in train and day N+1 in
+    # test, so the model is rewarded for recognising the cow rather than the
+    # condition.  Grouping forces every test animal to be unseen.
+    cv = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=42)
     scores = cross_validate(
-        clf, X_scaled, y, cv=cv,
+        model, X, y, groups=groups, cv=cv,
         scoring=["accuracy", "f1", "roc_auc"],
         return_train_score=False,
     )
 
     # Fit on full data for feature importance
-    clf.fit(X_scaled, y)
-    importances = dict(zip(available, clf.feature_importances_))
+    model.fit(X, y)
+    importances = dict(zip(available, model.named_steps["rf"].feature_importances_))
 
     results = {
         "status": "ok",
         "n_samples": len(y),
+        "n_animals": n_animals,
         "n_positive": int(y.sum()),
         "features": available,
+        "cv_scheme": "StratifiedGroupKFold(5) grouped by animal_id",
         "cv_accuracy": float(np.mean(scores["test_accuracy"])),
+        "cv_accuracy_sd": float(np.std(scores["test_accuracy"])),
         "cv_f1": float(np.mean(scores["test_f1"])),
+        "cv_f1_sd": float(np.std(scores["test_f1"])),
         "cv_auc": float(np.mean(scores["test_roc_auc"])),
+        "cv_auc_sd": float(np.std(scores["test_roc_auc"])),
         "feature_importances": importances,
     }
 
-    log.info("  CV Accuracy: %.3f", results["cv_accuracy"])
-    log.info("  CV F1:       %.3f", results["cv_f1"])
-    log.info("  CV AUC:      %.3f", results["cv_auc"])
+    log.info("  CV scheme:   %s", results["cv_scheme"])
+    log.info("  CV Accuracy: %.3f ± %.3f",
+             results["cv_accuracy"], results["cv_accuracy_sd"])
+    log.info("  CV F1:       %.3f ± %.3f", results["cv_f1"], results["cv_f1_sd"])
+    log.info("  CV AUC:      %.3f ± %.3f", results["cv_auc"], results["cv_auc_sd"])
     log.info("  Top features:")
     for feat, imp in sorted(
         importances.items(), key=lambda x: -x[1],
