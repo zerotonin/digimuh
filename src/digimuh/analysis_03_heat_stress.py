@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -148,10 +149,12 @@ def fit_dose_response(df: pd.DataFrame, min_days: int = 30) -> pd.DataFrame:
         ``thi_threshold`` (x0), ``slope`` (k), ``n_days``.
     """
     results = []
+    rejected: list[tuple[int, str]] = []
 
     for aid, grp in df.groupby("animal_id"):
         sub = grp.dropna(subset=["dwd_thi_max", "rumen_temp_z"])
         if len(sub) < min_days:
+            rejected.append((aid, f"too few days ({len(sub)} < {min_days})"))
             continue
 
         x = sub["dwd_thi_max"].values
@@ -164,22 +167,30 @@ def fit_dose_response(df: pd.DataFrame, min_days: int = 30) -> pd.DataFrame:
                 maxfev=5000,
                 bounds=([0, 0.001, 40, -5], [10, 2, 90, 5]),
             )
-            results.append({
-                "animal_id": aid,
-                "sigmoid_L": popt[0],
-                "slope_k": popt[1],
-                "thi_threshold": popt[2],
-                "baseline_b": popt[3],
-                "n_days": len(sub),
-            })
-        except (RuntimeError, ValueError):
+        except (RuntimeError, ValueError) as exc:
+            rejected.append((aid, type(exc).__name__))
             continue
+
+        results.append({
+            "animal_id": aid,
+            "sigmoid_L": popt[0],
+            "slope_k": popt[1],
+            "thi_threshold": popt[2],
+            "baseline_b": popt[3],
+            "n_days": len(sub),
+        })
 
     result_df = pd.DataFrame(results)
     log.info(
         "Fitted dose-response for %d / %d animals",
         len(result_df), df["animal_id"].nunique(),
     )
+    # Naming why each animal dropped out keeps a failed fit distinguishable
+    # from a genuinely flat responder in the surviving sample.
+    if rejected:
+        reasons = Counter(reason for _, reason in rejected)
+        log.info("  excluded %d: %s", len(rejected),
+                 ", ".join(f"{r} x{n}" for r, n in reasons.most_common()))
     return result_df
 
 
