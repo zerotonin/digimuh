@@ -2,8 +2,8 @@
 # Copy to ~/.config/digimuh/config.yaml and edit for your machine.
 # Or run:  digimuh-config
 
-# Path to the SQLite database
-database: ~/cow.db
+# Path to the SQLite database (absolute path on this machine)
+database: /path/to/your/cow.db
 
 # Default output directory for analysis results
 output: results/broken_stick

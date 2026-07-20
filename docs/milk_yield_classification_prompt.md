@@ -7,8 +7,7 @@ classification boundaries fit our herd.
 ## Context
 
 Read `milk_yield_classification.md` in this directory for full background.
-The repo is at `~/PyProjects/digimuh`.  Follow `CODING_STYLE_GUIDE.md` in
-the repo root.
+Follow the project coding style guide (lab-internal).
 
 ## Data sources
 
