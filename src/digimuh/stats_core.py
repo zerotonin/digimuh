@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
@@ -46,6 +47,46 @@ def p_to_stars(p: float) -> str:
     if p < 0.05:
         return "*"
     return "n.s."
+
+
+def apply_fdr_within(
+    df: pd.DataFrame,
+    family_cols: Sequence[str] = (),
+    *,
+    p_col: str = "p",
+    out_col: str = "p_fdr",
+) -> pd.DataFrame:
+    """Add Benjamini-Hochberg adjusted p-values, corrected within families.
+
+    A screen that reports dozens of correlations and stars each one on its
+    raw p-value will manufacture significance; this is the correction that
+    stops it.  ``p_col`` is deliberately left untouched so its meaning never
+    changes underneath an existing reader — the adjusted value lands in
+    ``out_col``, and the family each test belonged to is recorded in
+    ``family`` so the correction can be audited from the CSV alone.
+
+    Args:
+        df:          Long results table, one row per test.
+        family_cols: Columns whose combination defines a family.  Empty means
+                     the whole table is a single family.
+        p_col:       Column holding the raw p-values.
+        out_col:     Column to write the adjusted p-values into.
+
+    Returns:
+        A copy with ``out_col`` and ``family`` added.  NaN p-values are
+        preserved in place and excluded from the family size.
+    """
+    if df.empty or p_col not in df.columns:
+        return df
+    out = df.copy()
+    keys = [c for c in family_cols if c in out.columns]
+    out["family"] = (out[keys].astype(str).agg(" | ".join, axis=1)
+                     if keys else "all")
+    out[out_col] = np.nan
+    for _, idx in out.groupby("family").groups.items():
+        raw = out.loc[idx, p_col].to_numpy(dtype=float)
+        out.loc[idx, out_col] = correct_pvalues_array(raw, method="fdr_bh")
+    return out
 
 
 # ─────────────────────────────────────────────────────────────
