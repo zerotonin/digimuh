@@ -69,7 +69,8 @@ def ensure_unique_index(con: sqlite3.Connection) -> None:
         cols = [row[2] for row in cur.fetchall()]
         if cols == ["animal_id", "timestamp"]:
             if is_unique:
-                log.info("UNIQUE index '%s' already exists on gouna(animal_id, timestamp)", idx_name)
+                log.info("UNIQUE index '%s' already exists on "
+                         "gouna(animal_id, timestamp)", idx_name)
                 return
             else:
                 log.info("Dropping non-unique index '%s' to replace with UNIQUE", idx_name)
@@ -193,7 +194,8 @@ def ingest_file(con: sqlite3.Connection, filepath: Path, dry_run: bool = False) 
             for _, row in df.iterrows()
         ]
         con.executemany(
-            'INSERT OR IGNORE INTO gouna (animal_id, "timestamp", respirationfrequency, source_file_id) '
+            'INSERT OR IGNORE INTO gouna '
+            '(animal_id, "timestamp", respirationfrequency, source_file_id) '
             'VALUES (?, ?, ?, ?)',
             rows,
         )

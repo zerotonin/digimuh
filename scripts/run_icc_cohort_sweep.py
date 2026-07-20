@@ -45,13 +45,12 @@ from digimuh.extract import (
     extract_rumen_barn,
     load_tierauswahl,
 )
+from digimuh.paths import resolve_output
 from digimuh.stats_core import run_broken_stick_fits
 from digimuh.stats_lactation_curve import attach_dim, load_calvings
 from digimuh.stats_longitudinal import compute_breakpoint_icc
-from digimuh.viz_longitudinal import plot_breakpoint_icc
 from digimuh.viz_base import setup_figure
-from digimuh.paths import resolve_output
-
+from digimuh.viz_longitudinal import plot_breakpoint_icc
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s | %(message)s")

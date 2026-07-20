@@ -9,8 +9,10 @@ in the Tierauswahl.
 
 Usage::
 
-    python scripts/find_overlooked_gouna.py --db ~/cow.db --tierauswahl Tierauswahl.xlsx
-    python scripts/find_overlooked_gouna.py --db ~/cow.db --tierauswahl Tierauswahl.xlsx --year 2023
+    python scripts/find_overlooked_gouna.py \
+        --db <path to cow.db> --tierauswahl Tierauswahl.xlsx
+    python scripts/find_overlooked_gouna.py \
+        --db <path to cow.db> --tierauswahl Tierauswahl.xlsx --year 2023
 """
 
 from __future__ import annotations

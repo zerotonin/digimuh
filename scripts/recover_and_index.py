@@ -19,7 +19,6 @@ import sqlite3
 import sys
 import threading
 import time
-from pathlib import Path
 
 
 def fmt_size(nbytes: int) -> str:
@@ -248,7 +247,7 @@ def main() -> None:
     total_elapsed = time.time() - t_total
     print()
     print("=" * 60)
-    print(f"  ALL INDEXES COMPLETE")
+    print("  ALL INDEXES COMPLETE")
     print(f"  Total index time: {total_elapsed:.0f}s ({total_elapsed/60:.1f} min)")
     print(f"  Final DB size:    {fmt_size(os.path.getsize(db_path))}")
 
