@@ -116,7 +116,9 @@ def climate_summary(con: sqlite3.Connection) -> dict[int, dict]:
             "barn_THI_sd":   df["temp_hum_index"].std(),
             "n_climate":    len(df),
         }
-        all_T.append(df["temp"]); all_H.append(df["hum"]); all_TH.append(df["temp_hum_index"])
+        all_T.append(df["temp"])
+        all_H.append(df["hum"])
+        all_TH.append(df["temp_hum_index"])
     overall = {
         "barn_T_mean":  pd.concat(all_T).mean(),
         "barn_T_sd":    pd.concat(all_T).std(),
@@ -321,7 +323,7 @@ def main() -> None:
 
     md = render_markdown(clim, rrt, ye, cohort)
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUT_PATH.write_text(md)
+    OUT_PATH.write_text(md, encoding="utf-8")
     log.info("Wrote %s", OUT_PATH)
     print()
     print(md)
