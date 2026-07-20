@@ -173,3 +173,60 @@ def test_climate_eta_normalised(synthetic_rumen, synthetic_bs):
                       & (eta["relative_minutes"] == 0)]["thi_norm"]
     if not thi_at_zero.empty:
         assert abs(thi_at_zero.mean()) < 5, "THI norm at crossing should be near 0"
+
+
+# ─────────────────────────────────────────────────────────────
+#  « BH-FDR within families (C1) »
+# ─────────────────────────────────────────────────────────────
+
+def test_apply_fdr_within_never_undercuts_raw_p():
+    """BH adjustment is conservative: p_fdr >= p for every test."""
+    import numpy as np
+    import pandas as pd
+
+    from digimuh.stats_core import apply_fdr_within
+
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame({"group": ["a"] * 30 + ["b"] * 30,
+                       "p": rng.uniform(0, 1, 60)})
+    out = apply_fdr_within(df, ["group"])
+    assert (out["p_fdr"] >= out["p"] - 1e-12).all()
+    assert out["family"].nunique() == 2
+
+
+def test_apply_fdr_within_preserves_nan_and_family_size():
+    """NaN p-values stay NaN and are excluded from the family size."""
+    import numpy as np
+    import pandas as pd
+
+    from digimuh.stats_core import apply_fdr_within
+
+    df = pd.DataFrame({"p": [0.01, 0.02, np.nan, 0.60]})
+    out = apply_fdr_within(df)
+    assert out["p_fdr"].isna().sum() == 1
+    assert out.loc[2, "p_fdr"] != out.loc[2, "p_fdr"]        # still NaN
+    # Family size is 3, not 4: 0.01 * 3/1 = 0.03
+    assert np.isclose(out["p_fdr"].min(), 0.03, atol=1e-9)
+
+
+def test_milk_composition_screens_report_corrected_p():
+    """The four stratified screens must expose p_fdr, not just raw p."""
+    import numpy as np
+    import pandas as pd
+
+    from digimuh.stats_production import tnf_yield_correlations_by_class
+
+    rng = np.random.default_rng(2)
+    n = 300
+    tnf = pd.DataFrame({
+        "animal_id": rng.integers(1, 30, n),
+        "yield_class": rng.choice(["low", "middle", "high"], n),
+        "thi_tnf": rng.uniform(0, 1, n), "temp_tnf": rng.uniform(0, 1, n),
+        "daily_yield_kg": rng.normal(30, 5, n),
+        "relative_yield": rng.uniform(0.5, 1.1, n),
+        "yield_residual": rng.normal(0, 3, n),
+    })
+    out = tnf_yield_correlations_by_class(tnf)
+    assert {"p", "p_fdr", "family"} <= set(out.columns)
+    fin = out.dropna(subset=["p"])
+    assert (fin["p_fdr"] >= fin["p"] - 1e-12).all()
