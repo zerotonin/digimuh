@@ -1,7 +1,21 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────
+#  DigiMuh — database sanity check
+#  « size, indexes, and a row count on the largest fact table »
+# ─────────────────────────────────────────────────────────────────
+#  The database path is resolved through digimuh.config, so this
+#  script runs unmodified on any machine that has a config.yaml.
+# ─────────────────────────────────────────────────────────────────
+set -euo pipefail
+
 python3 -c "
-import sqlite3, os
-db = '/media/geuba03p/GEURTEN01/cow.db'
-print(f'DB size: {os.path.getsize(db)/1e9:.1f} GB')
+import sqlite3
+from digimuh.config import load_config
+
+db = load_config().database
+print(f'DB: {db}')
+print(f'DB size: {db.stat().st_size / 1e9:.1f} GB')
+
 con = sqlite3.connect(db)
 cur = con.cursor()
 
