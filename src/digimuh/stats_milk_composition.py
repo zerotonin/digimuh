@@ -173,10 +173,18 @@ def mlp_climate_correlations(
     ``yield_class`` column each of its categories is added as a
     separate group row.
 
+    This is a screen of roughly thirty tests per group, so raw p-values
+    would manufacture significance if starred directly.  ``p_fdr`` holds
+    the Benjamini-Hochberg value corrected across all
+    predictor × response tests **within each group** — pooled and each
+    yield class are separate analyses and so separate families.  Report
+    ``p_fdr``; ``p`` is kept only as the uncorrected record.
+
     Returns:
         Long DataFrame with columns ``group``, ``predictor``,
         ``response``, ``response_label``, ``unit``, ``n``,
-        ``n_animals``, ``rs``, ``p``, ``slope``, ``intercept``.
+        ``n_animals``, ``rs``, ``p``, ``p_fdr``, ``family``,
+        ``slope``, ``intercept``.
     """
     if df.empty:
         return pd.DataFrame()
@@ -219,7 +227,8 @@ def mlp_climate_correlations(
                     rs=float(rs), p=float(p),
                     slope=float(slope), intercept=float(intercept),
                 ))
-    return pd.DataFrame(rows)
+    from digimuh.stats_core import apply_fdr_within
+    return apply_fdr_within(pd.DataFrame(rows), ["group"])
 
 
 # ─────────────────────────────────────────────────────────────
@@ -331,7 +340,11 @@ def dilution_partition_summary(df: pd.DataFrame,
     Returns a long DataFrame with columns ``nutrient`` (``"fat"`` or
     ``"protein"``), ``component`` (``"observed"`` /
     ``"dilution_predicted"`` / ``"rumen_residual"``), ``rs``, ``p``,
-    ``slope``, ``n``.
+    ``p_fdr``, ``family``, ``slope``, ``n``.
+
+    The nine nutrient × component tests form a single family, so
+    ``p_fdr`` is Benjamini-Hochberg corrected across the whole table.
+    Report ``p_fdr``; ``p`` is the uncorrected record.
     """
     from scipy.stats import spearmanr
     rows: list[dict] = []
@@ -367,7 +380,8 @@ def dilution_partition_summary(df: pd.DataFrame,
                 n=int(n), rs=float(rs), p=float(p),
                 slope=float(slope), intercept=float(intercept),
             ))
-    return pd.DataFrame(rows)
+    from digimuh.stats_core import apply_fdr_within
+    return apply_fdr_within(pd.DataFrame(rows))
 
 
 # ─────────────────────────────────────────────────────────────

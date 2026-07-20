@@ -250,11 +250,16 @@ def tnf_yield_correlations_by_class(
         predictors: TNF columns to test.
         responses: Yield columns to test.
 
+    ``p_fdr`` holds the Benjamini-Hochberg value corrected across the
+    predictor × response tests **within each class** — the pooled row and
+    each yield class are separate analyses and so separate families.
+    Report ``p_fdr``; ``p`` is kept only as the uncorrected record.
+
     Returns:
         DataFrame of ``yield_class`` × ``predictor`` × ``response``
-        with ``n``, ``n_animals``, ``rs``, ``p``, ``slope``,
-        ``intercept``, ``median_y``.  The class ``"pooled"`` is
-        included as a reference row.
+        with ``n``, ``n_animals``, ``rs``, ``p``, ``p_fdr``, ``family``,
+        ``slope``, ``intercept``, ``median_y``.  The class ``"pooled"``
+        is included as a reference row.
     """
     rows: list[dict] = []
     classes = ["low", "middle", "high"]
@@ -288,7 +293,8 @@ def tnf_yield_correlations_by_class(
                     slope=float(slope), intercept=float(intercept),
                     median_y=float(valid[resp].median()),
                 ))
-    return pd.DataFrame(rows)
+    from digimuh.stats_core import apply_fdr_within
+    return apply_fdr_within(pd.DataFrame(rows), ["yield_class"])
 
 
 # ─────────────────────────────────────────────────────────────
@@ -413,8 +419,14 @@ def crossing_day_comparison(
             ``yield_class``.
         response: Response column name.
 
+    ``p_fdr`` holds the Benjamini-Hochberg value corrected across the
+    predictors tested **within each group**, matching the convention used
+    by the other stratified screens here.  Report ``p_fdr``; ``p`` is kept
+    only as the uncorrected record.
+
     Returns:
-        Long DataFrame, one row per (group × predictor).
+        Long DataFrame, one row per (group × predictor), with ``p``,
+        ``p_fdr`` and ``family``.
     """
     from scipy.stats import mannwhitneyu
     rows = []
@@ -448,7 +460,8 @@ def crossing_day_comparison(
                 median_diff=float(np.median(y_yes) - np.median(y_no)),
                 U=float(U), p=float(p),
             ))
-    return pd.DataFrame(rows)
+    from digimuh.stats_core import apply_fdr_within
+    return apply_fdr_within(pd.DataFrame(rows), ["group"])
 
 
 def daily_climate_vs_yield_correlations(
