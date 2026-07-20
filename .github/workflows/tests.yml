@@ -34,7 +34,7 @@ jobs:
 
       - name: Lint with ruff
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
-        run: ruff check src tests
+        run: ruff check src tests scripts
 
       - name: Run tests with coverage
         run: |
