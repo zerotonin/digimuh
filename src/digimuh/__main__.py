@@ -1,4 +1,5 @@
-"""Allow ``python -m digimuh.ingest_cow_db`` invocation."""
-from digimuh.ingest_cow_db import main
+"""Allow ``python -m digimuh`` invocation of the ingestion engine."""
+from digimuh.ingest import main
 
-main()
+if __name__ == "__main__":
+    main()
