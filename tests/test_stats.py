@@ -230,3 +230,59 @@ def test_milk_composition_screens_report_corrected_p():
     assert {"p", "p_fdr", "family"} <= set(out.columns)
     fin = out.dropna(subset=["p"])
     assert (fin["p_fdr"] >= fin["p"] - 1e-12).all()
+
+
+def test_longitudinal_change_from_baseline_is_fdr_corrected():
+    """The change-from-first-year block must be BH-corrected, not raw.
+
+    It used to print one raw p-value per year directly beneath a table that
+    *was* corrected, so both read as adjusted.  Feeds deterministic p-values
+    through the resampling test and checks the reported value is the BH
+    transform, not the input.
+    """
+    import contextlib
+    import io
+    from pathlib import Path
+
+    import numpy as np
+    import pandas as pd
+
+    import digimuh.stats_longitudinal as sl
+
+    feed = [0.20, 0.30, 0.40, 0.50, 0.60, 0.70,   # pairwise family
+            0.010, 0.040, 0.900]                   # change-from-baseline family
+
+    class _FakeFisher:
+        def __init__(self, **kwargs):
+            pass
+
+        def main(self):
+            return feed.pop(0) if feed else 0.5
+
+    # The function imports FisherResamplingTest lazily from rerandomstats,
+    # so that is the binding to replace.
+    import rerandomstats
+
+    original = rerandomstats.FisherResamplingTest
+    rerandomstats.FisherResamplingTest = _FakeFisher
+    try:
+        rng = np.random.default_rng(0)
+        bs = pd.DataFrame([
+            dict(animal_id=aid, year=year,
+                 thi_breakpoint=rng.normal(69, 2), thi_converged=True,
+                 temp_breakpoint=rng.normal(22, 2), temp_converged=False)
+            for aid in range(1, 31)
+            for year in (2021, 2022, 2023, 2024)
+        ])
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            sl._run_longitudinal_tests(bs, Path("."))
+        out = buf.getvalue()
+    finally:
+        rerandomstats.FisherResamplingTest = original
+
+    assert "change from first year (BH-FDR)" in out
+    # BH over [0.010, 0.040, 0.900] is [0.030, 0.060, 0.900]: the 0.040 test
+    # loses its star.  The raw value must not appear as the reported p.
+    assert "0.0300" in out and "0.0600" in out
+    assert "0.0400" not in out
