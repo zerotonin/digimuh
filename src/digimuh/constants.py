@@ -76,6 +76,16 @@ DELTA_MODERATE = 3.0
 MIN_COHORT_SIZE = 10
 """Minimum animals for longitudinal Sankey plots."""
 
+RESAMPLING_SEED = 20260721
+"""Seed for every Fisher re-randomisation test in the pipeline.
+
+Resampling draws a finite sample of the permutation space, so an unseeded
+run returns a slightly different p-value each time — measured drift is
+about 0.001-0.007, enough to move a borderline call across alpha.  Fixing
+one seed makes every reported p-value reproducible; report it in the
+methods section alongside the resampling count.
+"""
+
 
 # ─────────────────────────────────────────────────────────────────
 #  Figure defaults
