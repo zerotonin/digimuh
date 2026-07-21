@@ -17,9 +17,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from digimuh.constants import (
-    COLOURS,
-)
+from digimuh.constants import COLOURS, RESAMPLING_SEED
 from digimuh.paths import resolve_input, resolve_output
 from digimuh.viz_base import add_significance_bracket, save_figure, setup_figure
 
@@ -110,8 +108,9 @@ def plot_longitudinal_breakpoints(bs: pd.DataFrame, out_dir: Path) -> None:
                     d2 = repeat[
                         (repeat["year"] == y2) & (repeat["animal_id"].isin(ids_both))
                     ][bp_col].tolist()
-                    p = FisherResamplingTest(data_a=d1, data_b=d2,
-                                            func="medianDiff", combination_n=20_000).main()
+                    p = FisherResamplingTest(
+                        data_a=d1, data_b=d2, func="medianDiff",
+                        combination_n=20_000, seed=RESAMPLING_SEED).main()
                     raw_ps_abs.append(p)
                     year_pairs_abs.append((y1, y2))
             if raw_ps_abs:
@@ -158,7 +157,7 @@ def plot_longitudinal_breakpoints(bs: pd.DataFrame, out_dir: Path) -> None:
                     p = FisherResamplingTest(
                         data_a=changes.tolist(),
                         data_b=[0.0] * len(changes),
-                        func="medianDiff", combination_n=20_000).main()
+                        func="medianDiff", combination_n=20_000, seed=RESAMPLING_SEED).main()
                     stars = p_to_stars(p)
                     if stars != "n.s.":
                         anno_lines.append(f"{y}: {stars}")
@@ -204,7 +203,7 @@ def _posthoc_pairwise(year_data: list, years: list,
         return None
     return MultiGroupTest(data=flat, group=labels, test=test,
                           combination_n=combination_n,
-                          correction_type="fdr_bh").main()
+                          correction_type="fdr_bh", seed=RESAMPLING_SEED).main()
 
 
 def _compact_letters(years: list, posthoc) -> dict[str, str]:

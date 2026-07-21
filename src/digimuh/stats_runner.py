@@ -25,6 +25,7 @@ import pandas as pd
 from rerandomstats import correct_pvalues_array
 from scipy.stats import spearmanr
 
+from digimuh.constants import RESAMPLING_SEED
 from digimuh.paths import resolve_input, resolve_output
 from digimuh.stats_core import (
     compute_below_above,
@@ -181,8 +182,7 @@ def main() -> None:
             data_a=thi_conv.tolist(),
             data_b=ref_sample,
             func="medianDiff",
-            combination_n=20_000,
-        ).main()
+            combination_n=20_000, seed=RESAMPLING_SEED).main()
         median_bp = thi_conv.median()
         diff = median_bp - thi_ref
         result_table(
@@ -202,8 +202,7 @@ def main() -> None:
                     data_a=yr_bps.tolist(),
                     data_b=[thi_ref] * len(yr_bps),
                     func="medianDiff",
-                    combination_n=20_000,
-                ).main()
+                    combination_n=20_000, seed=RESAMPLING_SEED).main()
                 year_rows.append([year, len(yr_bps), yr_bps.median(),
                                   yr_bps.median() - thi_ref, p_yr,
                                   stars_styled(p_to_stars(p_yr))])

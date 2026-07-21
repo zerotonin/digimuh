@@ -18,6 +18,7 @@ import pandas as pd
 from rerandomstats import correct_pvalues_array
 from scipy.stats import f as f_dist
 
+from digimuh.constants import RESAMPLING_SEED
 from digimuh.stats_core import p_to_stars
 
 log = logging.getLogger("digimuh.stats")
@@ -526,8 +527,7 @@ def _run_longitudinal_tests(bs: pd.DataFrame, d: Path) -> None:
                 ][bp_col].tolist()
                 p = FisherResamplingTest(
                     data_a=d1, data_b=d2,
-                    func="medianDiff", combination_n=20_000,
-                ).main()
+                    func="medianDiff", combination_n=20_000, seed=RESAMPLING_SEED).main()
                 test_rows.append([f"{y1} vs {y2}", len(ids_both),
                                   np.median(d1), np.median(d2),
                                   np.median(d2) - np.median(d1), p, ""])
@@ -560,8 +560,7 @@ def _run_longitudinal_tests(bs: pd.DataFrame, d: Path) -> None:
             p = FisherResamplingTest(
                 data_a=changes.tolist(),
                 data_b=[0.0] * len(changes),
-                func="medianDiff", combination_n=20_000,
-            ).main()
+                func="medianDiff", combination_n=20_000, seed=RESAMPLING_SEED).main()
             change_rows.append([str(year), len(changes),
                                 f"{changes.median():+.1f}", "", ""])
             change_ps.append(p)

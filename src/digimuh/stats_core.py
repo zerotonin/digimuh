@@ -28,6 +28,8 @@ from rerandomstats import (
 )
 from scipy.stats import spearmanr
 
+from digimuh.constants import RESAMPLING_SEED
+
 log = logging.getLogger("digimuh.stats")
 
 
@@ -414,8 +416,7 @@ def run_statistical_tests(beh: pd.DataFrame) -> pd.DataFrame:
                 data_a=paired["body_temp_below"].tolist(),
                 data_b=paired["body_temp_above"].tolist(),
                 func="medianDiff",
-                combination_n=20_000,
-            ).main()
+                combination_n=20_000, seed=RESAMPLING_SEED).main()
             year_tests.append({
                 "year": year,
                 "test": "body_temp below vs above (Fisher medianDiff)",
@@ -434,8 +435,7 @@ def run_statistical_tests(beh: pd.DataFrame) -> pd.DataFrame:
                     data_a=paired_r["resp_below"].tolist(),
                     data_b=paired_r["resp_above"].tolist(),
                     func="medianDiff",
-                    combination_n=20_000,
-                ).main()
+                    combination_n=20_000, seed=RESAMPLING_SEED).main()
                 year_tests.append({
                     "year": year,
                     "test": "respiration below vs above (Fisher medianDiff)",
