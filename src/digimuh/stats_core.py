@@ -95,6 +95,21 @@ def apply_fdr_within(
 #  « broken-stick fits for all animals »
 # ─────────────────────────────────────────────────────────────
 
+def _linear_r2(x: np.ndarray, y: np.ndarray) -> float:
+    """R² of a straight-line fit — the smooth reaction-norm baseline.
+
+    Recorded per animal-year so the segmented model can be compared by
+    AIC against a no-threshold linear response without re-fitting.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    mask = np.isfinite(x) & np.isfinite(y)
+    if mask.sum() < 3 or np.ptp(x[mask]) == 0 or np.ptp(y[mask]) == 0:
+        return np.nan
+    r = np.corrcoef(x[mask], y[mask])[0, 1]
+    return float(r * r)
+
+
 def run_broken_stick_fits(
     rumen: pd.DataFrame, resp: pd.DataFrame,
     frontiers_only: bool = False,
@@ -131,6 +146,7 @@ def run_broken_stick_fits(
                 "animal_id": aid, "year": year, "date_enter": enter,
                 "n_readings": n_readings,
                 "thi_breakpoint": np.nan, "thi_converged": False,
+                "thi_linear_r2": np.nan, "temp_linear_r2": np.nan,
                 "temp_breakpoint": np.nan, "temp_converged": False,
                 "resp_thi_breakpoint": np.nan, "resp_thi_converged": False,
                 "resp_temp_breakpoint": np.nan, "resp_temp_converged": False,
@@ -231,6 +247,8 @@ def run_broken_stick_fits(
             "thi_slope_below": thi_fit.get("slope_below"),
             "thi_slope_above": thi_fit.get("slope_above"),
             "thi_r_squared": thi_fit.get("r_squared"),
+            "thi_linear_r2": _linear_r2(grp["barn_thi"].values,
+                                        grp["body_temp"].values),
             "thi_converged": thi_fit["converged"],
             "thi_davies_p": thi_davies["pvalue"],
             "thi_pscore_p": thi_pscore["pvalue"],
@@ -248,6 +266,8 @@ def run_broken_stick_fits(
             "temp_slope_below": temp_fit.get("slope_below"),
             "temp_slope_above": temp_fit.get("slope_above"),
             "temp_r_squared": temp_fit.get("r_squared"),
+            "temp_linear_r2": _linear_r2(grp["barn_temp"].values,
+                                         grp["body_temp"].values),
             "temp_converged": temp_fit["converged"],
             "temp_davies_p": temp_davies["pvalue"],
             "temp_pscore_p": temp_pscore["pvalue"],
