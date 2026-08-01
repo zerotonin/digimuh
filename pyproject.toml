@@ -37,6 +37,7 @@ analysis = [
     "matplotlib",
     "scipy",
     "scikit-learn",
+    "statsmodels",
     "rerandomstats >= 0.2.0",
     "plotly",
     "kaleido",
@@ -56,6 +57,7 @@ dev = [
     "matplotlib",
     "scipy",
     "scikit-learn",
+    "statsmodels",
     "rerandomstats >= 0.2.0",
     "ruff >= 0.4",
     # Runtime deps the analysis path actually uses.  Without these the test
@@ -74,6 +76,7 @@ progress = [
 digimuh-ingest    = "digimuh.ingest:main"
 digimuh-extract   = "digimuh.extract:main"
 digimuh-stats     = "digimuh.stats_runner:main"
+digimuh-model-comparison = "digimuh.stats_model_comparison:main"
 digimuh-plots     = "digimuh.viz_runner:main"
 digimuh-frontiers = "digimuh.run_frontiers_2026:main"
 digimuh-annual    = "digimuh.run_annual_yield:main"
