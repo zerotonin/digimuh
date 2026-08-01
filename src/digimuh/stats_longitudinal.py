@@ -407,6 +407,126 @@ def compute_breakpoint_icc(bs_results: pd.DataFrame,
     return pd.DataFrame(out_rows)
 
 
+# ─────────────────────────────────────────────────────────────
+#  « across-summer comparison — repeated-measures valid »
+#
+#  Most cows contribute breakpoints from more than one summer,
+#  so the four yearly samples are not independent and a
+#  between-groups rank test (Kruskal-Wallis) is not a valid
+#  primary test.  Continuous outcomes use a linear mixed model
+#  with a random intercept per cow (LRT on the summer factor);
+#  count outcomes use a Poisson GEE clustered by cow (Wald on
+#  the summer contrasts).  Kruskal-Wallis is retained only as a
+#  distribution-free sensitivity check.
+# ─────────────────────────────────────────────────────────────
+
+def _lmm_year_test(df: pd.DataFrame) -> dict:
+    """Linear mixed model with a random cow intercept; LRT on year."""
+    import warnings
+
+    import statsmodels.formula.api as smf
+    from scipy.stats import chi2
+    from statsmodels.tools.sm_exceptions import ConvergenceWarning
+
+    # A near-zero random-effect variance (ICC ≈ 0, e.g. the barn-temp
+    # breakpoint) makes statsmodels warn about a singular RE covariance and
+    # a boundary MLE.  That *is* the finding, not an error, so silence the
+    # noise rather than let it flood the pipeline log.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", ConvergenceWarning)
+        warnings.filterwarnings("ignore", message="Random effects covariance")
+        full = smf.mixedlm("y ~ C(year)", df, groups=df["cow"]).fit(reml=False)
+        null = smf.mixedlm("y ~ 1", df, groups=df["cow"]).fit(reml=False)
+    lr = 2.0 * (full.llf - null.llf)
+    dfree = int(df["year"].nunique() - 1)
+    vc = float(full.cov_re.iloc[0, 0])
+    icc = vc / (vc + float(full.scale)) if (vc + full.scale) > 0 else np.nan
+    return {"model": "LMM (LRT)", "stat": float(lr), "df": dfree,
+            "p": float(chi2.sf(lr, dfree)), "icc": float(icc)}
+
+
+def _gee_year_test(df: pd.DataFrame) -> dict:
+    """Poisson GEE clustered by cow; joint Wald test on the year contrasts."""
+    import statsmodels.api as sm
+
+    dummies = pd.get_dummies(df["year"].astype(str), drop_first=True, dtype=float)
+    year_cols = list(dummies.columns)
+    design = sm.add_constant(dummies)
+    gee = sm.GEE(df["y"].to_numpy(dtype=float), design, groups=df["cow"],
+                 family=sm.families.Poisson(),
+                 cov_struct=sm.cov_struct.Exchangeable()).fit()
+    restriction = np.zeros((len(year_cols), design.shape[1]))
+    for i, name in enumerate(year_cols):
+        restriction[i, design.columns.get_loc(name)] = 1.0
+    wald = gee.wald_test(restriction, scalar=True)
+    return {"model": "Poisson GEE (Wald)", "stat": float(wald.statistic),
+            "df": len(year_cols), "p": float(wald.pvalue), "icc": np.nan}
+
+
+def across_summer_test(values: np.ndarray, years: np.ndarray,
+                       animal_ids: np.ndarray, *,
+                       kind: str = "continuous") -> dict | None:
+    """Compare an outcome across summers, accounting for repeat cows.
+
+    Args:
+        values:     Outcome per cow-summer (breakpoint value or crossing count).
+        years:      Summer of each observation.
+        animal_ids: Cow identifier of each observation.
+        kind:       ``"continuous"`` → linear mixed model + LRT;
+                    ``"count"`` → Poisson GEE clustered by cow + Wald.
+
+    Returns:
+        A result dict with the repeated-measures test and the
+        Kruskal-Wallis sensitivity value, or ``None`` when fewer than two
+        summers carry enough data.  The model falls back to Kruskal-Wallis
+        only if the mixed model / GEE fails to fit.
+    """
+    df = pd.DataFrame({
+        "y": np.asarray(values, dtype=float),
+        "year": pd.to_numeric(pd.Series(years).reset_index(drop=True),
+                              errors="coerce"),
+        "cow": pd.Series(animal_ids).reset_index(drop=True).astype(str),
+    }).dropna(subset=["y", "year"])
+    if len(df) < 6 or df["year"].nunique() < 2:
+        return None
+    df["year"] = df["year"].astype(int)
+
+    from scipy.stats import kruskal
+
+    groups = [g["y"].to_numpy() for _, g in df.groupby("year") if len(g) >= 3]
+    kw_h = kw_p = np.nan
+    if len(groups) >= 2:
+        kw_h, kw_p = kruskal(*groups)
+
+    res = {"kind": kind, "n_obs": int(len(df)),
+           "n_animals": int(df["cow"].nunique()),
+           "n_years": int(df["year"].nunique()),
+           "kw_h": float(kw_h), "kw_p": float(kw_p),
+           "model": None, "stat": np.nan, "df": int(df["year"].nunique() - 1),
+           "p": np.nan, "icc": np.nan}
+    try:
+        res.update(_gee_year_test(df) if kind == "count"
+                   else _lmm_year_test(df))
+    except Exception as exc:  # noqa: BLE001 - never let a fit break a figure
+        log.warning("  across-summer %s model failed (%s); reporting "
+                    "Kruskal-Wallis only", kind, exc)
+    return res
+
+
+def format_across_summer(res: dict | None) -> str:
+    """Two-line annotation: repeated-measures model + KW sensitivity."""
+    if res is None:
+        return ""
+    lines = []
+    if res.get("model") and np.isfinite(res.get("p", np.nan)):
+        lines.append(f"{res['model']}: χ²({res['df']})={res['stat']:.1f}, "
+                     f"p={res['p']:.3g} {p_to_stars(res['p'])}")
+    if np.isfinite(res.get("kw_p", np.nan)):
+        lines.append(f"Kruskal-Wallis (sensitivity): "
+                     f"H={res['kw_h']:.1f}, p={res['kw_p']:.3g}")
+    return "\n".join(lines)
+
+
 def compute_stability(bs_results: pd.DataFrame) -> tuple[pd.DataFrame, float]:
     """ICC and paired data for repeat animals.
 
