@@ -292,3 +292,92 @@ def test_longitudinal_change_from_baseline_is_fdr_corrected(caplog):
     # loses its star.  The raw value must not appear as the reported p.
     assert "0.0300" in out and "0.0600" in out
     assert "0.0400" not in out
+
+
+# ─────────────────────────────────────────────────────────────
+#  across-summer repeated-measures tests (reviewer PS5.1)
+# ─────────────────────────────────────────────────────────────
+
+def _repeat_measures_frame(year_effect: float) -> pd.DataFrame:
+    """Synthetic breakpoints: 40 cows, up to 3 summers, cow + year effects."""
+    rng = np.random.default_rng(0)
+    rows = []
+    for cow in range(40):
+        cow_offset = rng.normal(0, 2.0)          # stable individual level
+        for year in (2021, 2022, 2023):
+            if rng.random() < 0.3:               # not every cow every summer
+                continue
+            val = 75 + cow_offset + year_effect * (year - 2022) + rng.normal(0, 1)
+            rows.append({"animal_id": cow, "year": year, "bp": val})
+    return pd.DataFrame(rows)
+
+
+def test_across_summer_continuous_uses_mixed_model():
+    from digimuh.stats_longitudinal import across_summer_test
+
+    df = _repeat_measures_frame(year_effect=2.0)   # real year trend
+    res = across_summer_test(df["bp"], df["year"], df["animal_id"],
+                             kind="continuous")
+    assert res["model"] == "LMM (LRT)"
+    assert res["df"] == 2                            # three summers
+    assert np.isfinite(res["kw_p"])                  # KW kept as sensitivity
+    assert res["p"] < 0.05                           # strong trend detected
+    assert 0.0 <= res["icc"] <= 1.0
+
+
+def test_across_summer_continuous_null_is_not_significant():
+    from digimuh.stats_longitudinal import across_summer_test
+
+    df = _repeat_measures_frame(year_effect=0.0)     # no year effect
+    res = across_summer_test(df["bp"], df["year"], df["animal_id"],
+                             kind="continuous")
+    assert res["p"] > 0.05
+
+
+def test_across_summer_counts_use_poisson_gee():
+    from digimuh.stats_longitudinal import across_summer_test
+
+    rng = np.random.default_rng(1)
+    rows = []
+    for cow in range(50):
+        base = rng.uniform(2, 6)
+        for year in (2021, 2022, 2023):
+            mean = base * (1.0 if year == 2021 else 2.5)   # counts climb
+            rows.append({"animal_id": cow, "year": year,
+                         "n": rng.poisson(mean)})
+    df = pd.DataFrame(rows)
+    res = across_summer_test(df["n"], df["year"], df["animal_id"], kind="count")
+    assert res["model"] == "Poisson GEE (Wald)"
+    assert np.isfinite(res["p"])
+    assert res["p"] < 0.05
+
+
+# ─────────────────────────────────────────────────────────────
+#  AIC model comparison (reviewer PS8.1)
+# ─────────────────────────────────────────────────────────────
+
+def test_model_comparison_prefers_threshold_over_linear():
+    from digimuh.stats_model_comparison import compute_model_comparison
+
+    # A regulated-then-deregulated response: the broken-stick captures far
+    # more variance than a straight line, so it must win on AIC everywhere.
+    rng = np.random.default_rng(2)
+    rows = []
+    for cow in range(30):
+        rows.append({
+            "animal_id": cow, "year": 2022, "n_readings": 400,
+            "thi_converged": True,
+            "thi_linear_r2": 0.05 + rng.uniform(0, 0.02),
+            "thi_r_squared": 0.30 + rng.uniform(0, 0.02),   # broken-stick
+            "thi_hill_r2": 0.28 + rng.uniform(0, 0.02),
+            "thi_slope_below": 0.01, "thi_slope_above": 0.08,
+            "thi_breakpoint": 74.0,
+        })
+    bs = pd.DataFrame(rows)
+    per_animal, summary = compute_model_comparison(bs, "thi")
+    assert len(per_animal) == 30
+    bs_row = summary.set_index("model").loc["broken-stick"]
+    lin_row = summary.set_index("model").loc["linear"]
+    assert bs_row["lowest_aic_share_pct"] == 100.0
+    assert lin_row["pct_beaten_by_broken_stick"] == 100.0
+    assert lin_row["median_delta_aic_vs_broken_stick"] > 2      # decisive
