@@ -40,6 +40,10 @@ from digimuh.stats_longitudinal import (
     compute_stability,
     make_summary_table,
 )
+from digimuh.stats_model_comparison import (
+    compute_model_comparison,
+    compute_population_rrm,
+)
 from digimuh.stats_production import (
     compute_thermoneutral_fraction,
     compute_tnf_yield_analysis,
@@ -78,6 +82,10 @@ def main() -> None:
     parser.add_argument("--frontiers", action="store_true",
                         help="Frontiers paper mode: skip Davies/pscore/Hill "
                              "(reserved for COMPAG companion papers)")
+    parser.add_argument("--population-rrm", action="store_true",
+                        help="Also fit the population mixed models (smooth "
+                             "random regression vs threshold hinge) by AIC; "
+                             "slower, for the model-comparison table.")
     args = parser.parse_args()
 
     setup_logging()
@@ -113,6 +121,27 @@ def main() -> None:
             on=["animal_id", "year"], how="left",
         )
     bs.to_csv(resolve_output(d, "broken_stick_results.csv"), index=False)
+
+    # ── Model comparison: threshold vs smooth reaction norm (AIC) ──
+    section("Model comparison",
+            "Broken-stick vs linear reaction norm vs Hill (AIC)")
+    per_animal, aic_summary = compute_model_comparison(bs, "thi")
+    if not aic_summary.empty:
+        per_animal.to_csv(
+            resolve_output(d, "breakpoint_model_aic_peranimal.csv"), index=False)
+        aic_summary.to_csv(
+            resolve_output(d, "breakpoint_model_aic_comparison.csv"), index=False)
+        bs_share = aic_summary.loc[
+            aic_summary["model"] == "broken-stick", "lowest_aic_share_pct"]
+        if not bs_share.empty:
+            kv("Broken-stick lowest AIC",
+               f"{bs_share.iloc[0]:.1f}% of {len(per_animal)} animal-summers")
+    if args.population_rrm:
+        pop = compute_population_rrm(rumen, "thi")
+        pop.to_csv(
+            resolve_output(d, "breakpoint_model_aic_population.csv"), index=False)
+        kv("Population RRM vs threshold",
+           f"ΔAIC = {pop['delta_aic_vs_threshold'].iloc[0]:.0f} (smaller AIC = threshold)")
 
     prefixes = [("thi", "THI > body temp"), ("temp", "Barn temp > body temp")]
     if not args.no_resp:
