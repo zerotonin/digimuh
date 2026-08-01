@@ -19,6 +19,7 @@ import pandas as pd
 
 from digimuh.constants import COLOURS, RESAMPLING_SEED
 from digimuh.paths import resolve_input, resolve_output
+from digimuh.stats_longitudinal import across_summer_test, format_across_summer
 from digimuh.viz_base import add_significance_bracket, save_figure, setup_figure
 
 log = logging.getLogger("digimuh.viz")
@@ -296,6 +297,12 @@ def _write_year_summary(year_data: list, years: list, fname: str,
         resolve_output(out_dir, f"{fname}_summary.csv"), index=False)
 
 
+def _write_across_summer_test(res: dict, fname: str, out_dir: Path) -> None:
+    """Write the repeated-measures across-summer test as ``<fname>_across_summer_test.csv``."""
+    pd.DataFrame([res]).to_csv(
+        resolve_output(out_dir, f"{fname}_across_summer_test.csv"), index=False)
+
+
 # ─────────────────────────────────────────────────────────────
 #  « breakpoint crossing count raincloud per year »
 # ─────────────────────────────────────────────────────────────
@@ -312,7 +319,7 @@ def plot_breakpoint_raincloud(out_dir: Path) -> None:
     experience more threshold exceedances over time (climate signal).
     """
     import matplotlib.pyplot as plt
-    from scipy.stats import gaussian_kde, kruskal
+    from scipy.stats import gaussian_kde
     setup_figure()
 
     path = resolve_input(out_dir, "crossing_times.csv")
@@ -389,19 +396,16 @@ def plot_breakpoint_raincloud(out_dir: Path) -> None:
                     f"n={n_animals}, median={med}",
                     fontsize=8, color="#666", va="center")
 
-        # Kruskal-Wallis across years
-        valid_groups = [v for v in year_data if len(v) >= 3]
-        if len(valid_groups) >= 2:
-            try:
-                stat, p = kruskal(*valid_groups)
-                ax.text(0.99, 0.02,
-                        f"Kruskal-Wallis H={stat:.1f}, p={p:.3g}",
-                        transform=ax.transAxes, ha="right",
-                        va="bottom", fontsize=9, color="#333",
-                        bbox=dict(boxstyle="round,pad=0.3",
-                                  facecolor="white", alpha=0.8))
-            except ValueError:
-                pass
+        # Across-summer test — repeated-measures valid (KW as sensitivity)
+        res = across_summer_test(counts["n_crossings"], counts["year"],
+                                 counts["animal_id"], kind="count")
+        if res is not None:
+            ax.text(0.99, 0.02, format_across_summer(res),
+                    transform=ax.transAxes, ha="right", va="bottom",
+                    fontsize=8, color="#333",
+                    bbox=dict(boxstyle="round,pad=0.3",
+                              facecolor="white", alpha=0.8))
+            _write_across_summer_test(res, fname, out_dir)
 
         # Post-hoc: pairwise years (Fisher resampling, BH-FDR) + CLD
         _annotate_posthoc(ax, year_data, years,
@@ -435,7 +439,7 @@ def plot_breakpoint_value_raincloud(bs: pd.DataFrame, out_dir: Path) -> None:
     code and Kruskal-Wallis test as the crossing-count raincloud.
     """
     import matplotlib.pyplot as plt
-    from scipy.stats import gaussian_kde, kruskal
+    from scipy.stats import gaussian_kde
     setup_figure()
 
     if bs.empty:
@@ -502,19 +506,16 @@ def plot_breakpoint_value_raincloud(bs: pd.DataFrame, out_dir: Path) -> None:
                     f"n={len(vals)}, median={np.median(vals):.1f}",
                     fontsize=8, color="#666", va="center")
 
-        # Kruskal-Wallis across years (same test as the crossing raincloud)
-        valid_groups = [v for v in year_data if len(v) >= 3]
-        if len(valid_groups) >= 2:
-            try:
-                stat, p = kruskal(*valid_groups)
-                ax.text(0.99, 0.02,
-                        f"Kruskal-Wallis H={stat:.1f}, p={p:.3g}",
-                        transform=ax.transAxes, ha="right", va="bottom",
-                        fontsize=9, color="#333",
-                        bbox=dict(boxstyle="round,pad=0.3",
-                                  facecolor="white", alpha=0.8))
-            except ValueError:
-                pass
+        # Across-summer test — repeated-measures valid (KW as sensitivity)
+        res = across_summer_test(conv[bp_col], conv["year"],
+                                 conv["animal_id"], kind="continuous")
+        if res is not None:
+            ax.text(0.99, 0.02, format_across_summer(res),
+                    transform=ax.transAxes, ha="right", va="bottom",
+                    fontsize=8, color="#333",
+                    bbox=dict(boxstyle="round,pad=0.3",
+                              facecolor="white", alpha=0.8))
+            _write_across_summer_test(res, fname, out_dir)
 
         # Post-hoc: pairwise years (Fisher resampling, BH-FDR) + CLD
         _annotate_posthoc(ax, year_data, years, fname, out_dir)
