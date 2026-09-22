@@ -63,6 +63,16 @@ WHERE animal_id = ?
   AND CAST("temp_without_drink_cycles" AS REAL) BETWEEN 30 AND 43
 """
 
+# Same rows before the 30–43 °C plausibility filter, so the share of
+# readings removed as sensor artefacts can be reported.
+SQL_RUMEN_RAW_COUNT = """
+SELECT COUNT(*) AS n_raw
+FROM smaxtec_derived
+WHERE animal_id = ?
+  AND "timestamp" >= ? AND "timestamp" <= ?
+  AND "temp_without_drink_cycles" IS NOT NULL
+"""
+
 SQL_BARN = """
 SELECT "timestamp",
        AVG(temp)           AS barn_temp,
@@ -293,6 +303,7 @@ def _get_barn(con, date_enter, date_exit, barn_cache,
 def extract_rumen_barn(
     con, tierauswahl: pd.DataFrame, exclude_drinking: bool = True,
     climate_source: str = "smaxtec",
+    filter_counts: list[dict] | None = None,
 ) -> pd.DataFrame:
     """Extract rumen temp + barn climate for all selected animals.
 
@@ -304,6 +315,9 @@ def extract_rumen_barn(
             ``temp_without_drink_cycles`` correction.
         climate_source: ``"smaxtec"`` (barn sensors, default) or
             ``"hobo"`` (weather loggers, THI derived via NRC 1971).
+        filter_counts: If given, one dict per animal-summer is appended
+            with the reading count after every filtering stage, so the
+            exclusions can be reported (see :func:`summarise_filter_counts`).
     """
     barn_cache: dict = {}
     frames = []
@@ -319,6 +333,13 @@ def extract_rumen_barn(
             log.info("  [%d/%d] Rumen data: animal %d (%s)", i + 1, total, aid, year)
 
         rumen = query_df(con, SQL_RUMEN, (aid, enter, exit_))
+        counts = {"animal_id": aid, "year": year,
+                  "n_raw": int(query_df(con, SQL_RUMEN_RAW_COUNT,
+                                        (aid, enter, exit_)).iloc[0, 0]),
+                  "n_in_range": len(rumen), "n_after_drink": 0,
+                  "n_matched": 0, "n_kept": 0}
+        if filter_counts is not None:
+            filter_counts.append(counts)
         if rumen.empty:
             continue
         rumen["timestamp"] = pd.to_datetime(rumen["timestamp"])
@@ -326,6 +347,7 @@ def extract_rumen_barn(
             rumen = _exclude_drinking_windows(rumen)
         elif "drink_cycles" in rumen.columns:
             rumen = rumen.drop(columns=["drink_cycles"])
+        counts["n_after_drink"] = len(rumen)
         if rumen.empty:
             continue
         rumen = rumen.sort_values("timestamp").reset_index(drop=True)
@@ -342,11 +364,13 @@ def extract_rumen_barn(
             direction="nearest",
         )
         df = df.dropna(subset=["barn_temp", "barn_thi"])
+        counts["n_matched"] = len(df)
         if df.empty:
             continue
 
         hour = df["timestamp"].dt.hour
         df = df[~hour.between(4, 7) & ~hour.between(16, 19)]
+        counts["n_kept"] = len(df)
         df["year"] = year
         df["date_enter"] = enter
         df["date_exit"] = exit_
@@ -354,6 +378,24 @@ def extract_rumen_barn(
                           "date_exit", "body_temp", "barn_temp", "barn_thi"]])
 
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+FILTER_STAGES = ("n_raw", "n_in_range", "n_after_drink", "n_matched", "n_kept")
+
+
+def summarise_filter_counts(counts: pd.DataFrame) -> pd.DataFrame:
+    """Cohort totals for each filtering stage, with the share of raw readings.
+
+    Stages, in order: raw rows in the bolus table, within the 30–43 °C
+    plausibility range, after the drinking-window exclusion, matched to a
+    barn reading within 30 min, and outside the milking windows.
+    """
+    totals = counts[list(FILTER_STAGES)].sum()
+    out = pd.DataFrame({"stage": FILTER_STAGES,
+                        "n": totals.to_numpy(dtype=int)})
+    out["pct_of_raw"] = (100.0 * out["n"] / max(int(totals["n_raw"]), 1)).round(2)
+    out["n_removed"] = (-out["n"].diff()).fillna(0).astype(int)
+    return out
 
 
 def extract_respiration_barn(con, tierauswahl: pd.DataFrame,
@@ -651,10 +693,21 @@ def main() -> None:
              len(ta), sorted(ta["year"].dropna().unique().astype(int)))
 
     log.info("Extracting rumen + barn data …")
+    filter_counts: list[dict] = []
     rumen = extract_rumen_barn(con, ta, exclude_drinking=exclude_drinking,
-                               climate_source=climate_source)
+                               climate_source=climate_source,
+                               filter_counts=filter_counts)
     rumen.to_csv(resolve_output(cfg.output, "rumen_barn.csv"), index=False)
     log.info("  → %d rows, %d animals", len(rumen), rumen["animal_id"].nunique())
+    counts = pd.DataFrame(filter_counts)
+    if not counts.empty:
+        counts.to_csv(resolve_output(cfg.output, "filter_counts.csv"), index=False)
+        summary = summarise_filter_counts(counts)
+        summary.to_csv(resolve_output(cfg.output, "filter_counts_summary.csv"),
+                       index=False)
+        for _, s in summary.iterrows():
+            log.info("  %-14s %11d  (%5.1f %% of raw, -%d)",
+                     s["stage"], s["n"], s["pct_of_raw"], s["n_removed"])
 
     log.info("Extracting respiration + barn data …")
     resp = extract_respiration_barn(con, ta, climate_source=climate_source)
