@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from digimuh.constants import COLOURS
+from digimuh.constants import BREAKPOINT_SEARCH_WINDOW, COLOURS
 from digimuh.viz_base import add_significance_bracket, save_figure, setup_figure
 
 log = logging.getLogger("digimuh.viz")
@@ -494,6 +494,143 @@ def plot_stability(pairs: pd.DataFrame, icc: float, out_dir: Path) -> None:
 #  « example broken-stick fits (rumen + respiration) »
 # ─────────────────────────────────────────────────────────────
 
+def _hinge_band(x: np.ndarray, y: np.ndarray, fit: dict,
+                xr: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """95 % band of the fitted broken stick evaluated over ``xr``.
+
+    Conditional on ψ the hinge model is ordinary least squares, so its
+    prediction band is exact.  The band is then widened by the envelope
+    of the same band at either end of the profile CI of ψ, so breakpoint
+    uncertainty shows as well as slope uncertainty.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    lo = np.full(xr.shape, np.inf)
+    hi = np.full(xr.shape, -np.inf)
+    for psi in (fit["breakpoint"], fit.get("breakpoint_ci_lo"),
+                fit.get("breakpoint_ci_hi")):
+        if psi is None or not np.isfinite(psi):
+            continue
+        X = np.column_stack([np.ones(len(x)), x, np.maximum(x - psi, 0.0)])
+        beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+        resid = y - X @ beta
+        sigma2 = float(resid @ resid) / max(len(x) - 3, 1)
+        try:
+            cov = sigma2 * np.linalg.inv(X.T @ X)
+        except np.linalg.LinAlgError:
+            continue
+        Xr = np.column_stack([np.ones(len(xr)), xr, np.maximum(xr - psi, 0.0)])
+        se = np.sqrt(np.einsum("ij,jk,ik->i", Xr, cov, Xr))
+        yhat = Xr @ beta
+        lo = np.minimum(lo, yhat - 1.96 * se)
+        hi = np.maximum(hi, yhat + 1.96 * se)
+    return lo, hi
+
+
+def _draw_broken_stick_panel(ax, x_vals: np.ndarray, y_vals: np.ndarray,
+                             x_range: tuple[float, float]) -> dict:
+    """Scatter + continuous broken-stick fit with its uncertainty, one axis.
+
+    Draws the fitted line, its 95 % band, the profile CI of the breakpoint
+    as a vertical strip, and a rug of the predictor along the bottom so
+    the reader sees how the readings fall either side of ψ.  Returns the
+    fit dict.
+    """
+    from matplotlib.transforms import blended_transform_factory
+    from rerandomstats import broken_stick_fit
+
+    colour = COLOURS["below_bp"]
+    ax.scatter(x_vals, y_vals, s=2, alpha=0.12, c=COLOURS["identity"])
+    xr = np.linspace(np.min(x_vals), np.max(x_vals), 300)
+    fit = broken_stick_fit(x_vals, y_vals, x_range=x_range)
+    if fit.get("converged"):
+        bp = fit["breakpoint"]
+        yp = np.where(xr <= bp,
+                      fit["intercept_below"] + fit["slope_below"] * xr,
+                      fit["intercept_above"] + fit["slope_above"] * xr)
+        lo, hi = _hinge_band(x_vals, y_vals, fit, xr)
+        ax.fill_between(xr, lo, hi, color=colour, alpha=0.18, linewidth=0,
+                        label="fit 95 % band")
+        ax.plot(xr, yp, color=colour, linewidth=2, label=f"BS bp={bp:.1f}")
+        ci_lo, ci_hi = fit.get("breakpoint_ci_lo"), fit.get("breakpoint_ci_hi")
+        if ci_lo is not None and np.isfinite(ci_lo) and np.isfinite(ci_hi):
+            ax.axvspan(ci_lo, ci_hi, color=colour, alpha=0.12, linewidth=0,
+                       label=f"bp 95 % CI [{ci_lo:.1f}, {ci_hi:.1f}]")
+        ax.axvline(bp, color=colour, linestyle="--", linewidth=1, alpha=0.6)
+    trans = blended_transform_factory(ax.transData, ax.transAxes)
+    ax.vlines(x_vals, 0.0, 0.03, transform=trans, color=COLOURS["identity"],
+              alpha=0.08, linewidth=0.5, rasterized=True)
+    return fit
+
+
+def plot_example_pair(rumen: pd.DataFrame, bs: pd.DataFrame,
+                      out_dir: Path) -> None:
+    """Figure 1 candidates: one well- and one poorly-determined THI fit.
+
+    Both cows are drawn against THI and barn temperature (2 × 2).  The
+    well-determined cow has the narrowest THI breakpoint CI among reliable,
+    non-truncated fits and the poorly-determined cow the widest, each
+    labelled as such so the figure brackets the cohort rather than
+    flattering it.  The chosen cows are written to a CSV companion.
+    """
+    import matplotlib.pyplot as plt
+
+    from digimuh.paths import resolve_output
+
+    setup_figure()
+    keep = "thi_bp_reliable" if "thi_bp_reliable" in bs.columns else "thi_converged"
+    cand = bs[bs[keep] == True]
+    if "thi_breakpoint_ci_truncated" in cand.columns:
+        cand = cand[cand["thi_breakpoint_ci_truncated"] != True]
+    cand = cand.dropna(subset=["thi_breakpoint_ci_lo", "thi_breakpoint_ci_hi"]).copy()
+    if len(cand) < 2:
+        log.info("  example pair: fewer than two eligible THI fits, skipping")
+        return
+    cand["ci_width"] = cand["thi_breakpoint_ci_hi"] - cand["thi_breakpoint_ci_lo"]
+    well = cand.sort_values(["ci_width", "thi_r_squared"],
+                            ascending=[True, False]).iloc[0]
+    poor = cand.sort_values("ci_width", ascending=False).iloc[0]
+
+    panels = [("barn_thi", "Barn THI", BREAKPOINT_SEARCH_WINDOW["thi"]),
+              ("barn_temp", "Barn temperature (°C)", BREAKPOINT_SEARCH_WINDOW["temp"])]
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8.5), sharey=True)
+    for row, (role, cow) in enumerate([("well-determined", well),
+                                       ("poorly-determined", poor)]):
+        aid, year = int(cow["animal_id"]), int(cow["year"])
+        grp = rumen[(rumen["animal_id"] == aid) & (rumen["year"] == year)]
+        for col, (env_col, env_label, x_range) in enumerate(panels):
+            ax = axes[row, col]
+            fit = _draw_broken_stick_panel(
+                ax, grp[env_col].to_numpy(dtype=float),
+                grp["body_temp"].to_numpy(dtype=float), x_range)
+            head = f"({'ABCD'[2 * row + col]}) {role} — animal {aid} ({year})"
+            if fit.get("converged"):
+                sub = (f"bp={fit['breakpoint']:.1f}, "
+                       f"SE={fit.get('breakpoint_se', np.nan):.2f}, "
+                       f"n={len(grp):,}")
+            else:
+                sub = f"no converged fit, n={len(grp):,}"
+            ax.set_title(f"{head}\n{sub}", fontsize=10)
+            ax.set_xlabel(env_label)
+            if col == 0:
+                ax.set_ylabel("Rumen temperature (°C)")
+            ax.legend(fontsize=7, loc="lower right")
+    fig.suptitle("Example broken-stick fits: well- vs poorly-determined "
+                 "breakpoint", fontsize=12, fontweight="bold")
+    fig.tight_layout()
+    save_figure(fig, "example_pair_fits", out_dir)
+
+    chosen = cand.loc[[well.name, poor.name],
+                      ["animal_id", "year", "thi_breakpoint",
+                       "thi_breakpoint_ci_lo", "thi_breakpoint_ci_hi",
+                       "ci_width", "thi_r_squared"]].copy()
+    chosen.insert(0, "role", ["well-determined", "poorly-determined"])
+    chosen.to_csv(resolve_output(out_dir, "example_pair_fits.csv"), index=False)
+    log.info("  example pair: well=%d/%d, poor=%d/%d",
+             int(well["animal_id"]), int(well["year"]),
+             int(poor["animal_id"]), int(poor["year"]))
+
+
 def plot_examples(
     rumen: pd.DataFrame, resp: pd.DataFrame, bs: pd.DataFrame,
     out_dir: Path,
@@ -531,20 +668,21 @@ def plot_examples(
             Defaults to all four.
     """
     import matplotlib.pyplot as plt
-    from rerandomstats import broken_stick_fit
     if show_hill:
         from rerandomstats import hill_fit
     setup_figure()
 
+    thi_win = BREAKPOINT_SEARCH_WINDOW["thi"]
+    temp_win = BREAKPOINT_SEARCH_WINDOW["temp"]
     configs = [
         ("rumen", rumen, "body_temp", "Rumen temperature (°C)",
-         "thi", "thi", "barn_thi", "Barn THI", (45, 80)),
+         "thi", "thi", "barn_thi", "Barn THI", thi_win),
         ("rumen", rumen, "body_temp", "Rumen temperature (°C)",
-         "temp", "temp", "barn_temp", "Barn temperature (°C)", (5, 35)),
+         "temp", "temp", "barn_temp", "Barn temperature (°C)", temp_win),
         ("resp", resp, "resp_rate", "Respiration rate (bpm)",
-         "resp_thi", "resp_thi", "barn_thi", "Barn THI", (45, 80)),
+         "resp_thi", "resp_thi", "barn_thi", "Barn THI", thi_win),
         ("resp", resp, "resp_rate", "Respiration rate (bpm)",
-         "resp_temp", "resp_temp", "barn_temp", "Barn temperature (°C)", (5, 35)),
+         "resp_temp", "resp_temp", "barn_temp", "Barn temperature (°C)", temp_win),
     ]
     if predictors is not None:
         configs = [c for c in configs if c[5] in predictors]
@@ -676,22 +814,8 @@ def plot_examples(
 
             x_vals = grp[env_col].values
             y_vals = grp[response_col].values
-
-            ax.scatter(x_vals, y_vals, s=2, alpha=0.12, c=COLOURS["identity"])
             xr = np.linspace(np.min(x_vals), np.max(x_vals), 300)
-
-            bs_fit = broken_stick_fit(x_vals, y_vals, x_range=x_range)
-            if bs_fit.get("converged"):
-                bp = bs_fit["breakpoint"]
-                yp = np.where(
-                    xr <= bp,
-                    bs_fit["intercept_below"] + bs_fit["slope_below"] * xr,
-                    bs_fit["intercept_above"] + bs_fit["slope_above"] * xr,
-                )
-                ax.plot(xr, yp, color=COLOURS["below_bp"], linewidth=2,
-                        label=f"BS bp={bp:.1f}")
-                ax.axvline(bp, color=COLOURS["below_bp"], linestyle="--",
-                           linewidth=1, alpha=0.6)
+            _draw_broken_stick_panel(ax, x_vals, y_vals, x_range)
 
             if show_hill:
                 h = hill_fit(x_vals, y_vals, x_range=x_range)
