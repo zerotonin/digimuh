@@ -493,6 +493,20 @@ def plot_climate_eta(out_dir: Path) -> None:
 
     log.info("  Plotting climate ETA (%d trace points) …", len(df))
 
+    # y = 0 is each cow's own breakpoint, itself an estimate: shade the
+    # threshold with ±1.96 × the median profile SE across reliable fits so
+    # the reader sees how sharp that reference line really is.
+    median_se: dict[str, float] = {}
+    bs_path = resolve_input(out_dir, "broken_stick_results.csv")
+    if bs_path.exists():
+        bs = pd.read_csv(bs_path)
+        for pred in ("thi", "temp"):
+            keep = (f"{pred}_bp_reliable" if f"{pred}_bp_reliable" in bs.columns
+                    else f"{pred}_converged")
+            se = bs.loc[bs[keep] == True, f"{pred}_breakpoint_se"].dropna()
+            if not se.empty:
+                median_se[pred] = float(se.median())
+
     configs = [
         {
             "trigger": "thi",
@@ -542,6 +556,12 @@ def plot_climate_eta(out_dir: Path) -> None:
                  label=cfg["norm_label"])
         ax1.axhline(0, color=cfg["norm_colour"], linewidth=1, linestyle="--",
                      alpha=0.5, label="Breakpoint (threshold)")
+        if cfg["trigger"] in median_se:
+            half = 1.96 * median_se[cfg["trigger"]]
+            ax1.axhspan(-half, half, color=cfg["norm_colour"], alpha=0.10,
+                        linewidth=0, zorder=0,
+                        label=f"Threshold uncertainty (±1.96 × median SE = "
+                              f"±{half:.2f})")
         ax1.set_xlabel("Time relative to crossing (minutes)")
         ax1.set_ylabel(cfg["norm_label"], color=cfg["norm_colour"])
         ax1.tick_params(axis="y", labelcolor=cfg["norm_colour"])
