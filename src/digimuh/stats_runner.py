@@ -55,6 +55,7 @@ from digimuh.stats_temporal import (
     compute_crossing_times,
     compute_derivative_ccf,
     compute_event_triggered_average,
+    compute_minutes_over_breakpoint,
     compute_thi_daily_profile,
 )
 
@@ -332,6 +333,10 @@ def main() -> None:
             "When during the 24h cycle does each cow's THI cross her breakpoint?")
     crossing_times = compute_crossing_times(rumen, bs)
     crossing_times.to_csv(resolve_output(d, "crossing_times.csv"), index=False)
+
+    minutes_over = compute_minutes_over_breakpoint(rumen, bs)
+    minutes_over.to_csv(
+        resolve_output(d, "minutes_over_breakpoint.csv"), index=False)
 
     if not crossing_times.empty:
         for pred in ["thi", "temp"]:

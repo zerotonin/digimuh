@@ -119,6 +119,10 @@ _STEM_TO_SUBJECT: dict[str, str] = {
     "breakpoint_stability":             "longitudinal",
     "breakpoint_icc":                   "longitudinal",
     "breakpoint_icc_forest":            "longitudinal",
+    "minutes_over_breakpoint":          "longitudinal",
+    "breakpoint_model_aic_comparison":  "longitudinal",
+    "breakpoint_model_aic_peranimal":   "longitudinal",
+    "breakpoint_model_aic_population":  "longitudinal",
 
     # ── 07 annual yield ───────────────────────────────────
     "annual_zscores":                   "annual",
@@ -161,6 +165,7 @@ _PREFIX_RULES: tuple[tuple[str, str], ...] = (
     ("sankey_",                  "longitudinal"),
     ("raincloud_crossing_count_","longitudinal"),
     ("raincloud_breakpoint_value_", "longitudinal"),
+    ("raincloud_minutes_over_",   "longitudinal"),
     ("retest_breakpoint_",        "longitudinal"),
     ("breakpoint_icc_",          "longitudinal"),
     ("breakpoint_stability_",    "longitudinal"),

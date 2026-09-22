@@ -49,6 +49,7 @@ from digimuh.viz_longitudinal import (
     plot_breakpoint_value_raincloud,
     plot_longitudinal_breakpoints,
     plot_longitudinal_sankey,
+    plot_minutes_over_breakpoint_raincloud,
     plot_threshold_sankey,
 )
 from digimuh.viz_production import plot_tnf_yield
@@ -145,6 +146,8 @@ def main() -> None:
         ("Longitudinal breakpoints", lambda: plot_longitudinal_breakpoints(bs, d)),
         ("Breakpoint raincloud", lambda: plot_breakpoint_raincloud(d)),
         ("Breakpoint value raincloud", lambda: plot_breakpoint_value_raincloud(bs, d)),
+        ("Minutes-over-breakpoint raincloud",
+         lambda: plot_minutes_over_breakpoint_raincloud(d)),
         ("Breakpoint retest scatter", lambda: plot_breakpoint_retest(bs, d)),
         ("Breakpoint ICC forest", lambda: plot_breakpoint_icc(d)),
         ("Longitudinal Sankey", lambda: plot_longitudinal_sankey(bs, d)),
