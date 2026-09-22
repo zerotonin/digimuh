@@ -28,6 +28,18 @@ log = logging.getLogger("digimuh.viz")
 
 _MILKING_WINDOWS = [(4, 7), (16, 19)]
 _KDE_COLOUR = "#009E73"
+_HOURS = range(24)
+
+
+def _shade_milking_windows(ax) -> None:
+    """Grey the excluded milking hours (04:00–07:59 and 16:00–19:59).
+
+    Hourly points sit on integer x, so each band runs from half an hour
+    before its first excluded hour to half an hour after its last one.
+    """
+    for start, end in _MILKING_WINDOWS:
+        ax.axvspan(start - 0.5, end + 0.5, alpha=0.25, color="#999999",
+                   linewidth=0, zorder=0)
 
 
 def _hourly_by_day_type(df: pd.DataFrame, var: str) -> dict[str, pd.DataFrame]:
@@ -58,12 +70,14 @@ def _draw_cool_stress_panel(ax, hourly: dict[str, pd.DataFrame]) -> None:
         h = hourly.get(day_type)
         if h is None:
             continue
+        # Missing hours become NaN so the line breaks over the milking
+        # windows instead of being drawn through data that is not there.
+        h = h.reindex(_HOURS)
         ax.fill_between(h.index, h["mean"] - h["sem"], h["mean"] + h["sem"],
                         alpha=0.2, color=colour)
         ax.plot(h.index, h["mean"], color=colour, linewidth=2,
                 marker="o", markersize=4, label=label)
-    for s, e in _MILKING_WINDOWS:
-        ax.axvspan(s, e, alpha=0.08, color="#999", zorder=0)
+    _shade_milking_windows(ax)
 
 
 def _overlay_crossing_density(ax, kde: tuple | None, legend_label: str):
@@ -171,17 +185,17 @@ def plot_circadian_null_model(out_dir: Path) -> None:
     if cool_h is not None and stress_h is not None:
         shared = cool_h.index.intersection(stress_h.index)
         if len(shared) > 5:
-            diff = stress_h.loc[shared, "mean"] - cool_h.loc[shared, "mean"]
+            diff = (stress_h.loc[shared, "mean"]
+                    - cool_h.loc[shared, "mean"]).reindex(_HOURS)
             dsem = np.sqrt(cool_h.loc[shared, "sem"] ** 2
-                           + stress_h.loc[shared, "sem"] ** 2)
-            ax_b.fill_between(shared, diff - dsem, diff + dsem,
+                           + stress_h.loc[shared, "sem"] ** 2).reindex(_HOURS)
+            ax_b.fill_between(diff.index, diff - dsem, diff + dsem,
                               alpha=0.2, color="#CC79A7")
-            ax_b.plot(shared, diff, color="#CC79A7", linewidth=2.5,
+            ax_b.plot(diff.index, diff, color="#CC79A7", linewidth=2.5,
                       marker="s", markersize=5,
                       label="Stress − cool (Δ rumen temp)")
             ax_b.axhline(0, color="#999", linewidth=0.8, linestyle="--")
-            for s, e in _MILKING_WINDOWS:
-                ax_b.axvspan(s, e, alpha=0.08, color="#999", zorder=0)
+            _shade_milking_windows(ax_b)
     ax_b2 = _overlay_crossing_density(ax_b, kdes.get("thi"),
                                       "THI crossing density")
     ax_b.set_ylabel("Δ rumen temperature (°C)")
@@ -270,8 +284,7 @@ def _plot_circadian_stacked(
             ax_k.fill_between(x_k, 0, y_k, alpha=0.22, color=colour)
             ax_k.plot(x_k, y_k, color=colour, linewidth=1.5,
                       label=f"{pred.upper()} crossings (n={n_k})")
-        for s, e in _MILKING_WINDOWS:
-            ax_k.axvspan(s, e, alpha=0.08, color="#999", zorder=0)
+        _shade_milking_windows(ax_k)
         ax_k.set_ylabel("Crossing density")
         ax_k.grid(False)
         ax_k.legend(fontsize=7, loc="upper left")
@@ -342,8 +355,7 @@ def plot_thi_daily_profile(out_dir: Path) -> None:
         if not np.isnan(herd_bp):
             ax.axhline(herd_bp, color="#333", linewidth=1.5, linestyle="--",
                        label=f"{bp_label} ({herd_bp:.1f})")
-        for start, end in [(4, 7), (16, 19)]:
-            ax.axvspan(start, end, alpha=0.08, color="#999", zorder=0)
+        _shade_milking_windows(ax)
         ax.set_ylabel(ylabel)
         ax.set_xticks(range(0, 24, 2))
         ax.set_xlim(-0.5, 23.5)
@@ -383,8 +395,7 @@ def plot_thi_daily_profile(out_dir: Path) -> None:
         if not np.isnan(herd_bp):
             ax.axhline(herd_bp, color="#333", linewidth=1.5, linestyle="--",
                        label=f"{bp_label} ({herd_bp:.1f})")
-        for start, end in [(4, 7), (16, 19)]:
-            ax.axvspan(start, end, alpha=0.08, color="#999", zorder=0)
+        _shade_milking_windows(ax)
         ax.set_ylabel(ylabel)
         ax.set_xticks(range(0, 24, 2))
         ax.set_xlim(-0.5, 23.5)
@@ -456,8 +467,7 @@ def plot_crossing_raster(out_dir: Path) -> None:
         cbar.set_label(bp_label, fontsize=9)
 
         # Milking windows
-        for start, end in [(4, 7), (16, 19)]:
-            ax.axvspan(start, end, alpha=0.08, color="#999", zorder=0)
+        _shade_milking_windows(ax)
 
         ax.set_xlabel("Hour of day")
         ax.set_ylabel(f"Animals (sorted by {bp_label}, n={n_animals})")
