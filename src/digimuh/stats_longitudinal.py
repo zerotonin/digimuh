@@ -445,27 +445,53 @@ def _lmm_year_test(df: pd.DataFrame) -> dict:
             "p": float(chi2.sf(lr, dfree)), "icc": float(icc)}
 
 
-def _gee_year_test(df: pd.DataFrame) -> dict:
-    """Poisson GEE clustered by cow; joint Wald test on the year contrasts."""
+def _gee_wald_year(df: pd.DataFrame, *, family, label: str,
+                   weights: np.ndarray | None = None) -> dict:
+    """GEE clustered by cow (exchangeable); joint Wald test on the year contrasts."""
     import statsmodels.api as sm
 
     dummies = pd.get_dummies(df["year"].astype(str), drop_first=True, dtype=float)
     year_cols = list(dummies.columns)
     design = sm.add_constant(dummies)
     gee = sm.GEE(df["y"].to_numpy(dtype=float), design, groups=df["cow"],
-                 family=sm.families.Poisson(),
+                 family=family, weights=weights,
                  cov_struct=sm.cov_struct.Exchangeable()).fit()
     restriction = np.zeros((len(year_cols), design.shape[1]))
     for i, name in enumerate(year_cols):
         restriction[i, design.columns.get_loc(name)] = 1.0
     wald = gee.wald_test(restriction, scalar=True)
-    return {"model": "Poisson GEE (Wald)", "stat": float(wald.statistic),
+    return {"model": label, "stat": float(wald.statistic),
             "df": len(year_cols), "p": float(wald.pvalue), "icc": np.nan}
+
+
+def _gee_year_test(df: pd.DataFrame) -> dict:
+    """Poisson GEE clustered by cow; joint Wald test on the year contrasts."""
+    import statsmodels.api as sm
+
+    return _gee_wald_year(df, family=sm.families.Poisson(),
+                          label="Poisson GEE (Wald)")
+
+
+def _weighted_gee_year_test(df: pd.DataFrame) -> dict:
+    """Gaussian GEE clustered by cow, weighted 1/SE²; Wald test on year.
+
+    A breakpoint is an estimate with its own standard error, so the
+    across-summer comparison should not treat every cow-summer as equally
+    informative.  statsmodels' mixed model takes no observation weights,
+    hence the weighted repeated-measures fit is a GEE with an exchangeable
+    working correlation within cow and inverse-variance weights.
+    """
+    import statsmodels.api as sm
+
+    return _gee_wald_year(df, family=sm.families.Gaussian(),
+                          label="Weighted GEE (1/SE², Wald)",
+                          weights=df["w"].to_numpy(dtype=float))
 
 
 def across_summer_test(values: np.ndarray, years: np.ndarray,
                        animal_ids: np.ndarray, *,
-                       kind: str = "continuous") -> dict | None:
+                       kind: str = "continuous",
+                       weights: np.ndarray | None = None) -> dict | None:
     """Compare an outcome across summers, accounting for repeat cows.
 
     Args:
@@ -474,6 +500,11 @@ def across_summer_test(values: np.ndarray, years: np.ndarray,
         animal_ids: Cow identifier of each observation.
         kind:       ``"continuous"`` → linear mixed model + LRT;
                     ``"count"`` → Poisson GEE clustered by cow + Wald.
+        weights:    Optional per-observation weights (``1/SE²`` of an
+                    estimated outcome).  When given, a weighted Gaussian
+                    GEE is fitted as well and reported under ``w_*`` keys;
+                    observations with a missing or non-positive weight are
+                    left out of that fit only.
 
     Returns:
         A result dict with the repeated-measures test and the
@@ -481,12 +512,16 @@ def across_summer_test(values: np.ndarray, years: np.ndarray,
         summers carry enough data.  The model falls back to Kruskal-Wallis
         only if the mixed model / GEE fails to fit.
     """
-    df = pd.DataFrame({
+    frame = {
         "y": np.asarray(values, dtype=float),
         "year": pd.to_numeric(pd.Series(years).reset_index(drop=True),
                               errors="coerce"),
         "cow": pd.Series(animal_ids).reset_index(drop=True).astype(str),
-    }).dropna(subset=["y", "year"])
+    }
+    if weights is not None:
+        frame["w"] = pd.to_numeric(pd.Series(weights).reset_index(drop=True),
+                                   errors="coerce")
+    df = pd.DataFrame(frame).dropna(subset=["y", "year"])
     if len(df) < 6 or df["year"].nunique() < 2:
         return None
     df["year"] = df["year"].astype(int)
@@ -510,21 +545,154 @@ def across_summer_test(values: np.ndarray, years: np.ndarray,
     except Exception as exc:  # noqa: BLE001 - never let a fit break a figure
         log.warning("  across-summer %s model failed (%s); reporting "
                     "Kruskal-Wallis only", kind, exc)
+
+    if "w" in df.columns:
+        wdf = df[np.isfinite(df["w"]) & (df["w"] > 0)]
+        res.update({"w_model": None, "w_stat": np.nan, "w_df": np.nan,
+                    "w_p": np.nan, "n_weighted": int(len(wdf))})
+        if len(wdf) >= 6 and wdf["year"].nunique() >= 2:
+            try:
+                wres = _weighted_gee_year_test(wdf)
+                res.update({"w_model": wres["model"], "w_stat": wres["stat"],
+                            "w_df": wres["df"], "w_p": wres["p"]})
+            except Exception as exc:  # noqa: BLE001
+                log.warning("  weighted across-summer model failed (%s)", exc)
     return res
 
 
 def format_across_summer(res: dict | None) -> str:
-    """Two-line annotation: repeated-measures model + KW sensitivity."""
+    """Annotation lines: repeated-measures model, weighted fit, KW sensitivity."""
     if res is None:
         return ""
     lines = []
     if res.get("model") and np.isfinite(res.get("p", np.nan)):
         lines.append(f"{res['model']}: χ²({res['df']})={res['stat']:.1f}, "
                      f"p={res['p']:.3g} {p_to_stars(res['p'])}")
+    if res.get("w_model") and np.isfinite(res.get("w_p", np.nan)):
+        lines.append(f"{res['w_model']}: χ²({int(res['w_df'])})="
+                     f"{res['w_stat']:.1f}, p={res['w_p']:.3g} "
+                     f"{p_to_stars(res['w_p'])}")
     if np.isfinite(res.get("kw_p", np.nan)):
         lines.append(f"Kruskal-Wallis (sensitivity): "
                      f"H={res['kw_h']:.1f}, p={res['kw_p']:.3g}")
     return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────
+#  « convergence audit — is non-convergence ignorable? »
+#
+#  A cow-summer fails to converge when her record is short or she
+#  saw too little heat to define an upper segment.  Both are facts
+#  about the cow, so dropping her is not ignorable missingness.
+#  These functions put the selection effect on record: the rate,
+#  how the two groups differ, and a distribution-free consistency
+#  statistic that uses the breakpoint CI rather than the point.
+# ─────────────────────────────────────────────────────────────
+
+_AUDIT_COVARIATES: tuple[tuple[str, str], ...] = (
+    ("n_readings",         "readings per cow-summer"),
+    ("n_days",             "days of record"),
+    ("max_predictor",      "maximum predictor value seen"),
+    ("lactation_nr",       "lactation number"),
+    ("mean_milk_yield_kg", "mean milk yield (kg/d)"),
+)
+
+
+def compute_convergence_rates(bs: pd.DataFrame) -> pd.DataFrame:
+    """Convergence rate per predictor and summer, plus the pooled row."""
+    rows = []
+    for pred in ("thi", "temp"):
+        col = f"{pred}_converged"
+        if col not in bs.columns:
+            continue
+        for year, grp in bs.groupby("year"):
+            n_conv = int((grp[col] == True).sum())
+            rows.append({"predictor": pred, "year": int(year),
+                         "n_total": int(len(grp)), "n_converged": n_conv,
+                         "rate": n_conv / len(grp)})
+        n_conv = int((bs[col] == True).sum())
+        rows.append({"predictor": pred, "year": "all", "n_total": int(len(bs)),
+                     "n_converged": n_conv, "rate": n_conv / len(bs)})
+    return pd.DataFrame(rows)
+
+
+def compute_convergence_audit(bs: pd.DataFrame, rumen: pd.DataFrame,
+                              predictor: str = "thi") -> pd.DataFrame:
+    """Compare converged against non-converged cow-summers on covariates.
+
+    Each covariate is compared between the two groups with a Mann-Whitney
+    U test and the family is BH-FDR corrected, so the direction and size
+    of any selection effect is reported rather than assumed away.
+    """
+    from scipy.stats import mannwhitneyu
+
+    env_col = "barn_thi" if predictor == "thi" else "barn_temp"
+    r = rumen[["animal_id", "year", "timestamp", env_col]].copy()
+    r["date"] = pd.to_datetime(r["timestamp"]).dt.date
+    per = r.groupby(["animal_id", "year"]).agg(
+        n_days=("date", "nunique"), max_predictor=(env_col, "max")).reset_index()
+    df = bs.merge(per, on=["animal_id", "year"], how="left")
+    conv = df[f"{predictor}_converged"] == True
+
+    rows, raw_ps = [], []
+    for col, label in _AUDIT_COVARIATES:
+        if col not in df.columns:
+            continue
+        a = df.loc[conv, col].dropna().to_numpy(dtype=float)
+        b = df.loc[~conv, col].dropna().to_numpy(dtype=float)
+        if len(a) < 3 or len(b) < 3:
+            continue
+        u, p = mannwhitneyu(a, b, alternative="two-sided")
+        rows.append({"predictor": predictor, "covariate": col, "label": label,
+                     "n_converged": len(a), "n_not_converged": len(b),
+                     "median_converged": float(np.median(a)),
+                     "median_not_converged": float(np.median(b)),
+                     "diff": float(np.median(a) - np.median(b)),
+                     "U": float(u), "p": float(p)})
+        raw_ps.append(p)
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out["p_adj"] = correct_pvalues_array(np.array(raw_ps), method="fdr_bh")
+        out["stars"] = out["p_adj"].map(p_to_stars)
+    return out
+
+
+def compute_ci_overlap(bs: pd.DataFrame, predictor: str = "thi",
+                       ) -> tuple[pd.DataFrame, float]:
+    """Do a cow's breakpoint CIs in consecutive summers overlap?
+
+    A distribution-free companion to the test-retest correlation: for each
+    cow observed in two consecutive summers, whether the two profile 95 %
+    CIs share any value.  Returns the per-pair table and the proportion of
+    overlapping pairs.
+    """
+    bp, lo, hi = (f"{predictor}_breakpoint", f"{predictor}_breakpoint_ci_lo",
+                  f"{predictor}_breakpoint_ci_hi")
+    keep = (f"{predictor}_bp_reliable" if f"{predictor}_bp_reliable" in bs.columns
+            else f"{predictor}_converged")
+    conv = (bs[bs[keep] == True].dropna(subset=[bp, lo, hi])
+              .sort_values(["animal_id", "year"]))
+    g = conv.groupby("animal_id")
+    nxt = conv.assign(next_year=g["year"].shift(-1), bp_this=g[bp].shift(-1),
+                      lo_this=g[lo].shift(-1), hi_this=g[hi].shift(-1))
+    pairs = nxt[nxt["next_year"] == nxt["year"] + 1]
+    if pairs.empty:
+        return pd.DataFrame(), np.nan
+    out = pd.DataFrame({
+        "animal_id": pairs["animal_id"].to_numpy(),
+        "from_year": pairs["year"].to_numpy(dtype=int),
+        "to_year": pairs["next_year"].to_numpy(dtype=int),
+        "bp_last": pairs[bp].to_numpy(),
+        "ci_lo_last": pairs[lo].to_numpy(),
+        "ci_hi_last": pairs[hi].to_numpy(),
+        "bp_this": pairs["bp_this"].to_numpy(),
+        "ci_lo_this": pairs["lo_this"].to_numpy(),
+        "ci_hi_this": pairs["hi_this"].to_numpy(),
+    })
+    out["gap"] = np.maximum(0.0, np.maximum(out["ci_lo_this"] - out["ci_hi_last"],
+                                            out["ci_lo_last"] - out["ci_hi_this"]))
+    out["overlap"] = out["gap"] == 0.0
+    return out, float(out["overlap"].mean())
 
 
 def compute_stability(bs_results: pd.DataFrame) -> tuple[pd.DataFrame, float]:
