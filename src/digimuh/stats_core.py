@@ -28,7 +28,8 @@ from rerandomstats import (
 )
 from scipy.stats import spearmanr
 
-from digimuh.constants import RESAMPLING_SEED
+from digimuh.constants import BREAKPOINT_SEARCH_WINDOW, RESAMPLING_SEED
+from digimuh.stats_breakpoint_summary import check_breakpoint_continuity
 
 log = logging.getLogger("digimuh.stats")
 
@@ -156,18 +157,28 @@ def _linear_r2(x: np.ndarray, y: np.ndarray) -> float:
     return float(r * r)
 
 
+def _constraint_bound(free_fit: dict) -> bool | float:
+    """Did the slope constraint bind?  True when the free optimum violates it."""
+    if not free_fit.get("converged"):
+        return np.nan
+    return not (free_fit["slope_above"] > free_fit["slope_below"]
+                and free_fit["slope_above"] > 0)
+
+
 def run_broken_stick_fits(
     rumen: pd.DataFrame, resp: pd.DataFrame,
-    frontiers_only: bool = False,
 ) -> pd.DataFrame:
     """Fit broken-stick models per animal-year.
+
+    Every cow-summer gets the constrained broken-stick fit, the
+    unconstrained sensitivity fit, the Davies and pseudo-score tests for
+    the existence of a breakpoint, and the Hill fit — unconditionally,
+    so the decision of what to report is made downstream, not here.  The
+    returned frame is checked for continuity at every breakpoint.
 
     Args:
         rumen: rumen_barn.csv DataFrame.
         resp: respiration_barn.csv DataFrame.
-        frontiers_only: If True, skip Davies/pscore/Hill fits
-            (Frontiers paper: broken-stick only).  These methods
-            are reserved for the COMPAG companion papers.
 
     Returns:
         One row per animal-year with breakpoint results.
@@ -200,33 +211,22 @@ def run_broken_stick_fits(
             })
             continue
 
-        # Body temp fits
-        thi_fit = broken_stick_fit(
-            grp["barn_thi"].values, grp["body_temp"].values, x_range=(45, 80))
-        temp_fit = broken_stick_fit(
-            grp["barn_temp"].values, grp["body_temp"].values, x_range=(5, 35))
-
-        # Breakpoint existence tests (body temp) — COMPAG companion papers
-        if not frontiers_only:
-            thi_davies = davies_test(
-                grp["barn_thi"].values, grp["body_temp"].values, x_range=(45, 80))
-            thi_pscore = pscore_test(
-                grp["barn_thi"].values, grp["body_temp"].values, x_range=(45, 80))
-            temp_davies = davies_test(
-                grp["barn_temp"].values, grp["body_temp"].values, x_range=(5, 35))
-            temp_pscore = pscore_test(
-                grp["barn_temp"].values, grp["body_temp"].values, x_range=(5, 35))
-            thi_hill = hill_fit(
-                grp["barn_thi"].values, grp["body_temp"].values, x_range=(45, 80))
-            temp_hill = hill_fit(
-                grp["barn_temp"].values, grp["body_temp"].values, x_range=(5, 35))
-        else:
-            _empty_test = {"pvalue": np.nan}
-            thi_davies = thi_pscore = temp_davies = temp_pscore = _empty_test
-            _empty_hill = {"ec50": np.nan, "hill_n": np.nan,
-                           "lower_bend": np.nan, "r_squared": np.nan,
-                           "aic": np.nan, "converged": False}
-            thi_hill = temp_hill = _empty_hill
+        # Body temp fits: constrained, unconstrained sensitivity, existence
+        # tests and the Hill alternative — all of them, every cow-summer
+        thi_x, temp_x, y = (grp["barn_thi"].values, grp["barn_temp"].values,
+                            grp["body_temp"].values)
+        thi_win, temp_win = (BREAKPOINT_SEARCH_WINDOW["thi"],
+                             BREAKPOINT_SEARCH_WINDOW["temp"])
+        thi_fit = broken_stick_fit(thi_x, y, x_range=thi_win)
+        temp_fit = broken_stick_fit(temp_x, y, x_range=temp_win)
+        thi_free = broken_stick_fit(thi_x, y, x_range=thi_win, constrain=False)
+        temp_free = broken_stick_fit(temp_x, y, x_range=temp_win, constrain=False)
+        thi_davies = davies_test(thi_x, y, x_range=thi_win)
+        thi_pscore = pscore_test(thi_x, y, x_range=thi_win)
+        temp_davies = davies_test(temp_x, y, x_range=temp_win)
+        temp_pscore = pscore_test(temp_x, y, x_range=temp_win)
+        thi_hill = hill_fit(thi_x, y, x_range=thi_win)
+        temp_hill = hill_fit(temp_x, y, x_range=temp_win)
 
         # Respiration fits
         resp_grp = resp[
@@ -235,40 +235,17 @@ def run_broken_stick_fits(
         has_resp = len(resp_grp) >= 50
 
         if has_resp:
-            resp_thi_fit = broken_stick_fit(
-                resp_grp["barn_thi"].values, resp_grp["resp_rate"].values,
-                x_range=(45, 80))
-            resp_temp_fit = broken_stick_fit(
-                resp_grp["barn_temp"].values, resp_grp["resp_rate"].values,
-                x_range=(5, 35))
-            # Breakpoint existence tests (respiration) — COMPAG
-            if not frontiers_only:
-                resp_thi_davies = davies_test(
-                    resp_grp["barn_thi"].values, resp_grp["resp_rate"].values,
-                    x_range=(45, 80))
-                resp_thi_pscore = pscore_test(
-                    resp_grp["barn_thi"].values, resp_grp["resp_rate"].values,
-                    x_range=(45, 80))
-                resp_temp_davies = davies_test(
-                    resp_grp["barn_temp"].values, resp_grp["resp_rate"].values,
-                    x_range=(5, 35))
-                resp_temp_pscore = pscore_test(
-                    resp_grp["barn_temp"].values, resp_grp["resp_rate"].values,
-                    x_range=(5, 35))
-                resp_thi_hill = hill_fit(
-                    resp_grp["barn_thi"].values, resp_grp["resp_rate"].values,
-                    x_range=(45, 80))
-                resp_temp_hill = hill_fit(
-                    resp_grp["barn_temp"].values, resp_grp["resp_rate"].values,
-                    x_range=(5, 35))
-            else:
-                _empty_test = {"pvalue": np.nan}
-                resp_thi_davies = resp_thi_pscore = _empty_test
-                resp_temp_davies = resp_temp_pscore = _empty_test
-                _empty_hill = {"ec50": np.nan, "hill_n": np.nan,
-                               "lower_bend": np.nan, "r_squared": np.nan,
-                               "aic": np.nan, "converged": False}
-                resp_thi_hill = resp_temp_hill = _empty_hill
+            rthi_x, rtemp_x, ry = (resp_grp["barn_thi"].values,
+                                   resp_grp["barn_temp"].values,
+                                   resp_grp["resp_rate"].values)
+            resp_thi_fit = broken_stick_fit(rthi_x, ry, x_range=thi_win)
+            resp_temp_fit = broken_stick_fit(rtemp_x, ry, x_range=temp_win)
+            resp_thi_davies = davies_test(rthi_x, ry, x_range=thi_win)
+            resp_thi_pscore = pscore_test(rthi_x, ry, x_range=thi_win)
+            resp_temp_davies = davies_test(rtemp_x, ry, x_range=temp_win)
+            resp_temp_pscore = pscore_test(rtemp_x, ry, x_range=temp_win)
+            resp_thi_hill = hill_fit(rthi_x, ry, x_range=thi_win)
+            resp_temp_hill = hill_fit(rtemp_x, ry, x_range=temp_win)
         else:
             resp_thi_fit = {"breakpoint": np.nan, "converged": False, "n": 0}
             resp_temp_fit = {"breakpoint": np.nan, "converged": False, "n": 0}
@@ -292,6 +269,8 @@ def run_broken_stick_fits(
             "thi_breakpoint_ci_truncated": thi_fit.get("breakpoint_ci_truncated", False),
             "thi_slope_below": thi_fit.get("slope_below"),
             "thi_slope_above": thi_fit.get("slope_above"),
+            "thi_intercept_below": thi_fit.get("intercept_below"),
+            "thi_intercept_above": thi_fit.get("intercept_above"),
             "thi_r_squared": thi_fit.get("r_squared"),
             "thi_linear_r2": _linear_r2(grp["barn_thi"].values,
                                         grp["body_temp"].values),
@@ -303,6 +282,11 @@ def run_broken_stick_fits(
             "thi_hill_bend": thi_hill.get("lower_bend"),
             "thi_hill_r2": thi_hill.get("r_squared"),
             "thi_hill_converged": thi_hill.get("converged", False),
+            "thi_breakpoint_unconstrained": thi_free["breakpoint"],
+            "thi_unconstrained_converged": thi_free["converged"],
+            "thi_unconstrained_slope_below": thi_free.get("slope_below"),
+            "thi_unconstrained_slope_above": thi_free.get("slope_above"),
+            "thi_constraint_bound": _constraint_bound(thi_free),
             # Body temp vs barn temp
             "temp_breakpoint": temp_fit["breakpoint"],
             "temp_breakpoint_ci_lo": temp_fit.get("breakpoint_ci_lo"),
@@ -311,6 +295,8 @@ def run_broken_stick_fits(
             "temp_breakpoint_ci_truncated": temp_fit.get("breakpoint_ci_truncated", False),
             "temp_slope_below": temp_fit.get("slope_below"),
             "temp_slope_above": temp_fit.get("slope_above"),
+            "temp_intercept_below": temp_fit.get("intercept_below"),
+            "temp_intercept_above": temp_fit.get("intercept_above"),
             "temp_r_squared": temp_fit.get("r_squared"),
             "temp_linear_r2": _linear_r2(grp["barn_temp"].values,
                                          grp["body_temp"].values),
@@ -322,6 +308,11 @@ def run_broken_stick_fits(
             "temp_hill_bend": temp_hill.get("lower_bend"),
             "temp_hill_r2": temp_hill.get("r_squared"),
             "temp_hill_converged": temp_hill.get("converged", False),
+            "temp_breakpoint_unconstrained": temp_free["breakpoint"],
+            "temp_unconstrained_converged": temp_free["converged"],
+            "temp_unconstrained_slope_below": temp_free.get("slope_below"),
+            "temp_unconstrained_slope_above": temp_free.get("slope_above"),
+            "temp_constraint_bound": _constraint_bound(temp_free),
             # Resp vs THI
             "resp_thi_breakpoint": resp_thi_fit["breakpoint"],
             "resp_thi_slope_below": resp_thi_fit.get("slope_below"),
@@ -349,7 +340,11 @@ def run_broken_stick_fits(
         }
         results.append(rec)
 
-    return flag_unreliable_breakpoints(pd.DataFrame(results))
+    out = flag_unreliable_breakpoints(pd.DataFrame(results))
+    worst = check_breakpoint_continuity(out)
+    log.info("  continuity at the breakpoint — max |jump|: %s",
+             ", ".join(f"{k} {v:.1e}" for k, v in worst.items()))
+    return out
 
 
 # ─────────────────────────────────────────────────────────────

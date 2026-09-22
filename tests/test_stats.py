@@ -405,3 +405,84 @@ def test_flag_unreliable_breakpoints():
     })
     out = flag_unreliable_breakpoints(bs)
     assert list(out["thi_bp_reliable"]) == [True, False, False, False, False, True]
+
+
+# ─────────────────────────────────────────────────────────────
+#  breakpoint summaries: continuity guard, imbalance, percentiles
+# ─────────────────────────────────────────────────────────────
+
+def _summary_bs() -> pd.DataFrame:
+    """Two reliable continuous fits and one non-converged row."""
+    return pd.DataFrame({
+        "animal_id": [1, 2, 3], "year": [2024, 2024, 2023],
+        "thi_breakpoint": [72.0, 76.0, np.nan],
+        "thi_intercept_below": [38.0, 38.5, np.nan],
+        "thi_slope_below": [0.01, 0.0, np.nan],
+        "thi_slope_above": [0.08, 0.05, np.nan],
+        # intercept_above = a − δ·ψ, so the segments meet by construction
+        "thi_intercept_above": [38.0 - 0.07 * 72.0, 38.5 - 0.05 * 76.0, np.nan],
+        "thi_converged": [True, True, False],
+        "thi_bp_reliable": [True, True, False],
+    })
+
+
+def test_continuity_guard_passes_and_catches_a_double_knot():
+    from digimuh.stats_breakpoint_summary import check_breakpoint_continuity
+
+    bs = _summary_bs()
+    assert check_breakpoint_continuity(bs)["thi"] < 1e-9
+    bs.loc[0, "thi_intercept_above"] += 0.3
+    with pytest.raises(RuntimeError, match="discontinuous"):
+        check_breakpoint_continuity(bs)
+
+
+def test_fraction_below_breakpoint_uses_reliable_fits_only():
+    from digimuh.stats_breakpoint_summary import (
+        compute_fraction_below_breakpoint,
+        summarise_fraction_below,
+    )
+
+    bs = _summary_bs()
+    rumen = pd.DataFrame({
+        "animal_id": [1] * 4 + [2] * 4 + [3] * 4,
+        "year": [2024] * 8 + [2023] * 4,
+        "barn_thi": [70, 71, 73, 74, 70, 75, 77, 78, 60, 61, 62, 63],
+    })
+    frac = compute_fraction_below_breakpoint(rumen, bs, "thi")
+    assert set(frac["animal_id"]) == {1, 2}
+    by_cow = frac.set_index("animal_id")
+    assert by_cow.loc[1, "fraction_below"] == 0.5
+    assert by_cow.loc[2, "fraction_below"] == 0.5
+    s = summarise_fraction_below(frac)
+    assert s["pooled"] == 0.5 and s["n_cow_summers"] == 2
+
+
+def test_breakpoint_percentiles_pooled_and_per_year():
+    from digimuh.stats_breakpoint_summary import compute_breakpoint_percentiles
+
+    pct = compute_breakpoint_percentiles(_summary_bs(), predictors=("thi",))
+    pooled = pct[pct["year"] == "all"].iloc[0]
+    assert pooled["n"] == 2 and pooled["p50"] == 74.0
+    assert set(pct["year"]) == {"all", 2024}
+
+
+def test_run_broken_stick_fits_is_ungated_and_continuous(synthetic_rumen):
+    """Every cow-summer gets the existence tests, the unconstrained fit and
+    stored intercepts; the segments meet at ψ."""
+    from digimuh.stats_breakpoint_summary import breakpoint_jump
+    from digimuh.stats_core import run_broken_stick_fits
+
+    rumen = synthetic_rumen.assign(date_enter="2023-07-01")
+    bs = run_broken_stick_fits(rumen, pd.DataFrame())
+    assert len(bs) == 5
+    conv = bs[bs["thi_converged"] == True]
+    assert len(conv) >= 3                                   # planted knee at 68
+    for col in ("thi_davies_p", "thi_pscore_p", "thi_hill_converged",
+                "thi_intercept_below", "thi_intercept_above",
+                "thi_breakpoint_unconstrained", "thi_constraint_bound",
+                "thi_bp_reliable"):
+        assert col in bs.columns, col
+    assert conv["thi_davies_p"].notna().all()
+    assert conv["thi_pscore_p"].notna().all()
+    assert (conv["thi_davies_p"] < 0.05).all()
+    assert breakpoint_jump(bs, "thi").abs().max() < 1e-6
