@@ -95,6 +95,52 @@ def apply_fdr_within(
 #  « broken-stick fits for all animals »
 # ─────────────────────────────────────────────────────────────
 
+def flag_unreliable_breakpoints(bs: pd.DataFrame) -> pd.DataFrame:
+    """Add ``<predictor>_bp_reliable`` flags marking unidentified fits.
+
+    A converged fit is *unreliable* when its breakpoint is not
+    identifiable — the CI is wider than :data:`BP_CI_WIDTH_FRAC` of the
+    window, the knee sits within :data:`BP_EDGE_FRAC` of the lower edge, or
+    the sub-threshold slope is more negative than
+    :data:`BP_SLOPE_BELOW_MIN`.  Non-converged fits are reliable = False.
+    Nothing is dropped; consumers filter on the flag.
+
+    A CI *truncated at the upper boundary* is deliberately not a flag: it
+    marks a high, well-estimated threshold (a heat-tolerant cow whose knee
+    sits near the top of the range), not an unidentified fit — the CI-width
+    rule already catches genuinely wide, non-identifiable CIs in either
+    direction.
+    """
+    from digimuh.constants import (
+        BP_CI_WIDTH_FRAC,
+        BP_EDGE_FRAC,
+        BP_SLOPE_BELOW_MIN,
+        BREAKPOINT_SEARCH_WINDOW,
+    )
+
+    out = bs.copy()
+    for pred, (lo, hi) in BREAKPOINT_SEARCH_WINDOW.items():
+        bp_col = f"{pred}_breakpoint"
+        if bp_col not in out.columns:
+            continue
+        w = hi - lo
+        idx = out.index
+        conv = out.get(f"{pred}_converged", pd.Series(False, index=idx)).fillna(False) == True  # noqa: E712
+        bp = out[bp_col]
+        ci_lo = out.get(f"{pred}_breakpoint_ci_lo")
+        ci_hi = out.get(f"{pred}_breakpoint_ci_hi")
+        wide = ((ci_hi - ci_lo) > BP_CI_WIDTH_FRAC * w
+                if ci_lo is not None and ci_hi is not None
+                else pd.Series(False, index=idx))
+        lower_edge = bp <= lo + BP_EDGE_FRAC * w
+        neg_slope = out.get(f"{pred}_slope_below",
+                            pd.Series(np.nan, index=idx)) < BP_SLOPE_BELOW_MIN
+        unreliable = (wide.fillna(False) | lower_edge.fillna(False)
+                      | neg_slope.fillna(False))
+        out[f"{pred}_bp_reliable"] = conv & ~unreliable
+    return out
+
+
 def _linear_r2(x: np.ndarray, y: np.ndarray) -> float:
     """R² of a straight-line fit — the smooth reaction-norm baseline.
 
@@ -303,7 +349,7 @@ def run_broken_stick_fits(
         }
         results.append(rec)
 
-    return pd.DataFrame(results)
+    return flag_unreliable_breakpoints(pd.DataFrame(results))
 
 
 # ─────────────────────────────────────────────────────────────
@@ -354,7 +400,9 @@ def compute_below_above(
     bs_results: pd.DataFrame,
 ) -> pd.DataFrame:
     """Per-animal means below/above their individual THI breakpoint."""
-    converged = bs_results[bs_results["thi_converged"] == True]
+    keep_col = ("thi_bp_reliable" if "thi_bp_reliable" in bs_results.columns
+                else "thi_converged")
+    converged = bs_results[bs_results[keep_col] == True]
     records = []
 
     for _, row in converged.iterrows():
