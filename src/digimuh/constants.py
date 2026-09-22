@@ -147,3 +147,35 @@ MIN_READINGS = 50
 
 GRID_STEPS = 200
 """Number of breakpoint candidates in grid search."""
+
+
+# ─────────────────────────────────────────────────────────────────
+#  Breakpoint fit quality control  « flag the unidentified fits »
+# ─────────────────────────────────────────────────────────────────
+#  A broken-stick fit can "converge" to a breakpoint that is not
+#  actually identifiable — the CI truncates at the search boundary,
+#  the CI spans most of the range, the knee is pinned at the lower
+#  edge, or the sub-threshold slope runs meaningfully negative (the
+#  fitter compensating for a misplaced knee).  Such fits give
+#  spurious threshold values and, downstream, inflate the exposure
+#  metrics (a cow whose knee lands at the low edge is counted as
+#  "above threshold" almost all summer).  These thresholds mark them.
+
+BREAKPOINT_SEARCH_WINDOW: dict[str, tuple[float, float]] = {
+    "thi": THI_RANGE,
+    "temp": TEMP_RANGE,
+}
+"""Search window (x_range) per predictor — the fitter's breakpoint bounds."""
+
+BP_CI_WIDTH_FRAC = 0.33
+"""Flag when the breakpoint CI is wider than this fraction of the window."""
+
+BP_EDGE_FRAC = 0.02
+"""Flag when the breakpoint sits within this fraction of the lower edge."""
+
+BP_SLOPE_BELOW_MIN = -0.02
+"""Flag when the sub-threshold slope is more negative than this."""
+
+BP_FRACTION_ABOVE_MAX = 0.90
+"""Exposure metrics: drop a cow-year with more than this share of readings
+above its breakpoint (a degenerate, near-everything-above fit)."""
