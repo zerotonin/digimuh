@@ -620,9 +620,13 @@ def plot_breakpoint_value_raincloud(bs: pd.DataFrame, out_dir: Path) -> None:
                     f"n={len(vals)}, median={np.median(vals):.1f}",
                     fontsize=8, color="#666", va="center")
 
-        # Across-summer test — repeated-measures valid (KW as sensitivity)
+        # Across-summer test — repeated-measures valid (KW as sensitivity),
+        # plus the 1/SE²-weighted fit so breakpoint uncertainty is carried in
+        se_col = bp_col.replace("_breakpoint", "_breakpoint_se")
+        weights = (1.0 / conv[se_col] ** 2) if se_col in conv.columns else None
         res = across_summer_test(conv[bp_col], conv["year"],
-                                 conv["animal_id"], kind="continuous")
+                                 conv["animal_id"], kind="continuous",
+                                 weights=weights)
         if res is not None:
             ax.text(0.99, 0.02, format_across_summer(res),
                     transform=ax.transAxes, ha="right", va="bottom",
