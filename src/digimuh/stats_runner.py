@@ -27,6 +27,11 @@ from scipy.stats import spearmanr
 
 from digimuh.constants import RESAMPLING_SEED
 from digimuh.paths import resolve_input, resolve_output
+from digimuh.stats_breakpoint_summary import (
+    compute_breakpoint_percentiles,
+    compute_fraction_below_breakpoint,
+    summarise_fraction_below,
+)
 from digimuh.stats_core import (
     compute_below_above,
     compute_spearman,
@@ -37,6 +42,9 @@ from digimuh.stats_core import (
 from digimuh.stats_longitudinal import (
     _run_longitudinal_tests,
     compute_breakpoint_icc,
+    compute_ci_overlap,
+    compute_convergence_audit,
+    compute_convergence_rates,
     compute_stability,
     make_summary_table,
 )
@@ -93,11 +101,8 @@ def main() -> None:
     reset_steps()
     d = args.data
 
-    if args.frontiers:
-        banner("Broken-stick analysis (Frontiers mode)")
-        log.info("Davies/pscore/Hill SKIPPED (--frontiers, reserved for COMPAG)")
-    else:
-        banner("Broken-stick statistical analysis")
+    banner("Broken-stick analysis (Frontiers mode)" if args.frontiers
+           else "Broken-stick statistical analysis")
 
     log.info("Loading CSVs from %s", d)
     rumen = pd.read_csv(resolve_input(d, "rumen_barn.csv"))
@@ -111,17 +116,57 @@ def main() -> None:
     prod = pd.read_csv(prod_path) if prod_path.exists() else pd.DataFrame()
 
     # ── 1. Model fitting ─────────────────────────────────────
-    if args.frontiers:
-        section("Model fitting", "Broken-stick regression only")
-    else:
-        section("Model fitting", "Broken-stick, Davies/pscore, Hill (4PL)")
-    bs = run_broken_stick_fits(rumen, resp, frontiers_only=args.frontiers)
+    section("Model fitting",
+            "Broken-stick (constrained + unconstrained), Davies/pscore, Hill (4PL)")
+    bs = run_broken_stick_fits(rumen, resp)
     if not prod.empty:
         bs = bs.merge(
             prod[["animal_id", "year", "mean_milk_yield_kg", "lactation_nr"]],
             on=["animal_id", "year"], how="left",
         )
     bs.to_csv(resolve_output(d, "broken_stick_results.csv"), index=False)
+
+    # ── Breakpoint audit: convergence, uncertainty, imbalance ──
+    section("Breakpoint audit",
+            "Convergence, CI overlap, readings below threshold, herd percentiles")
+    rates = compute_convergence_rates(bs)
+    rates.to_csv(resolve_output(d, "convergence_rates.csv"), index=False)
+    audit = pd.concat([compute_convergence_audit(bs, rumen, p)
+                       for p in ("thi", "temp")], ignore_index=True)
+    audit.to_csv(resolve_output(d, "convergence_audit.csv"), index=False)
+    for pred in ("thi", "temp"):
+        pooled = rates[(rates["predictor"] == pred) & (rates["year"] == "all")]
+        if not pooled.empty:
+            kv(f"{pred.upper()} converged",
+               f"{int(pooled['n_converged'].iloc[0])} of "
+               f"{int(pooled['n_total'].iloc[0])} "
+               f"({100 * pooled['rate'].iloc[0]:.1f}%)")
+        overlap, share = compute_ci_overlap(bs, pred)
+        overlap.to_csv(resolve_output(d, f"ci_overlap_{pred}.csv"), index=False)
+        if not overlap.empty:
+            kv(f"{pred.upper()} consecutive-summer CI overlap",
+               f"{100 * share:.1f}% of {len(overlap)} pairs")
+        bound = bs[f"{pred}_constraint_bound"].dropna()
+        if not bound.empty:
+            kv(f"{pred.upper()} slope constraint bound",
+               f"{100 * bound.astype(float).mean():.1f}% of {len(bound)} "
+               f"unconstrained fits")
+    frac = pd.concat([compute_fraction_below_breakpoint(rumen, bs, p)
+                      for p in ("thi", "temp")], ignore_index=True)
+    frac.to_csv(resolve_output(d, "fraction_below_breakpoint.csv"), index=False)
+    for pred in ("thi", "temp"):
+        s = summarise_fraction_below(frac[frac["predictor"] == pred])
+        if s:
+            kv(f"{pred.upper()} readings below breakpoint",
+               f"median {100 * s['median']:.1f}% per cow-summer, "
+               f"pooled {100 * s['pooled']:.1f}%")
+    pct = compute_breakpoint_percentiles(bs)
+    pct.to_csv(resolve_output(d, "breakpoint_percentiles.csv"), index=False)
+    thi_all = pct[(pct["predictor"] == "thi") & (pct["year"] == "all")]
+    if not thi_all.empty:
+        kv("THI herd breakpoint percentiles",
+           f"p25 {thi_all['p25'].iloc[0]:.1f}, median {thi_all['p50'].iloc[0]:.1f}, "
+           f"p75 {thi_all['p75'].iloc[0]:.1f}")
 
     # ── Model comparison: threshold vs smooth reaction norm (AIC) ──
     section("Model comparison",
