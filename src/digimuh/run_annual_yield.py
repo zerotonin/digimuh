@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -41,6 +42,9 @@ _SURFACES = (
 
 
 def main() -> None:
+    # Headless by default (detached runs, CI, SLURM): without a display
+    # matplotlib falls back to a Qt backend and aborts the whole stage.
+    os.environ.setdefault("MPLBACKEND", "Agg")
     parser = argparse.ArgumentParser(
         description="Year-round milk-yield analysis (large Neubau cohort).")
     parser.add_argument("--data", type=str, default="results/broken_stick",
