@@ -426,6 +426,118 @@ def plot_breakpoint_raincloud(out_dir: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────
+#  « minutes-over-breakpoint raincloud per year »
+# ─────────────────────────────────────────────────────────────
+
+def plot_minutes_over_breakpoint_raincloud(out_dir: Path) -> None:
+    """Raincloud plots of annual heat-load dose: minutes above the breakpoint.
+
+    For each animal-year, the total minutes the barn THI (or barn temp)
+    stayed above that cow's individual breakpoint — the cumulative
+    exposure, the companion to the crossing *count*.  Reads
+    ``minutes_over_breakpoint.csv`` (produced by stats).  The
+    repeated-measures test is fitted on the above-threshold reading count
+    (Poisson GEE clustered by cow), with Kruskal-Wallis as a sensitivity
+    check; the axis shows the corresponding minutes.
+    """
+    import matplotlib.pyplot as plt
+    from scipy.stats import gaussian_kde
+    setup_figure()
+
+    path = resolve_input(out_dir, "minutes_over_breakpoint.csv")
+    if not path.exists():
+        log.info("  minutes_over_breakpoint.csv not found, skipping "
+                 "minutes-over raincloud")
+        return
+
+    mob = pd.read_csv(path)
+    if mob.empty:
+        return
+
+    for pred, pred_label, fname in [
+        ("thi", "THI breakpoint", "raincloud_minutes_over_thi"),
+        ("temp", "Barn temp breakpoint", "raincloud_minutes_over_temp"),
+    ]:
+        sub = mob[mob["predictor"] == pred].dropna(subset=["minutes_over"])
+        if sub.empty:
+            continue
+
+        years = sorted(sub["year"].unique().astype(int))
+        if len(years) < 2:
+            continue
+
+        year_data = [sub[sub["year"] == y]["minutes_over"].to_numpy()
+                     for y in years]
+
+        fig, ax = plt.subplots(figsize=(10, 1.5 + 1.4 * len(years)))
+
+        for i, (y, vals) in enumerate(zip(years, year_data)):
+            y_pos = i
+            colour = COLOURS["year"].get(y, COLOURS["below_bp"])
+            span = max(vals.max() - vals.min(), 1.0)
+
+            if len(vals) > 5 and np.ptp(vals) > 0:
+                kde = gaussian_kde(vals, bw_method=0.3)
+                x_kde = np.linspace(max(0, vals.min() - 0.05 * span),
+                                    vals.max() + 0.05 * span, 200)
+                density = kde(x_kde)
+                density_scaled = density / density.max() * 0.38
+                ax.fill_between(x_kde, y_pos, y_pos + density_scaled,
+                                alpha=0.3, color=colour)
+                ax.plot(x_kde, y_pos + density_scaled,
+                        color=colour, linewidth=1.2)
+
+            jitter = np.random.uniform(-0.15, -0.35, len(vals))
+            ax.scatter(vals, y_pos + jitter, s=10, alpha=0.5,
+                       color=colour, edgecolors="none", zorder=3)
+
+            ax.boxplot(
+                vals, positions=[y_pos - 0.02], widths=0.12,
+                vert=False, patch_artist=True,
+                boxprops=dict(facecolor=colour, alpha=0.5, edgecolor="#333"),
+                medianprops=dict(color="#333", linewidth=2),
+                whiskerprops=dict(color="#333"),
+                capprops=dict(color="#333"),
+                flierprops=dict(marker="o", markersize=2, alpha=0.3),
+                manage_ticks=False,
+            )
+
+            ax.text(0.0, y_pos - 0.38,
+                    f"n={len(vals)}, median={np.median(vals):.0f} min",
+                    fontsize=8, color="#666", va="center")
+
+        # Repeated-measures test on the above-threshold reading count
+        counts = (sub.groupby(["animal_id", "year"])["n_readings_above"]
+                     .sum().reset_index())
+        res = across_summer_test(counts["n_readings_above"], counts["year"],
+                                 counts["animal_id"], kind="count")
+        if res is not None:
+            ax.text(0.99, 0.02, format_across_summer(res),
+                    transform=ax.transAxes, ha="right", va="bottom",
+                    fontsize=8, color="#333",
+                    bbox=dict(boxstyle="round,pad=0.3",
+                              facecolor="white", alpha=0.8))
+            _write_across_summer_test(res, fname, out_dir)
+
+        _annotate_posthoc(ax, year_data, years, fname, out_dir)
+        _write_year_summary(year_data, years, fname, out_dir)
+
+        ax.set_yticks(range(len(years)))
+        ax.set_yticklabels([str(y) for y in years], fontsize=11)
+        ax.set_xlabel(f"Minutes above {pred_label} per animal")
+        ax.set_title(f"Annual minutes above {pred_label} per animal",
+                     fontsize=13, fontweight="bold")
+        ax.set_xlim(left=0)
+        ax.invert_yaxis()
+        fig.tight_layout()
+        save_figure(fig, fname, out_dir)
+
+        sub[["animal_id", "year", "minutes_over", "hours_over",
+             "n_readings_above", "breakpoint"]].to_csv(
+            resolve_output(out_dir, f"{fname}.csv"), index=False)
+
+
+# ─────────────────────────────────────────────────────────────
 #  « breakpoint value raincloud per year »
 # ─────────────────────────────────────────────────────────────
 
@@ -452,7 +564,9 @@ def plot_breakpoint_value_raincloud(bs: pd.DataFrame, out_dir: Path) -> None:
         ("temp_breakpoint", "temp_converged", "Barn temp breakpoint (°C)",
          "raincloud_breakpoint_value_temp"),
     ]:
-        conv = bs[bs[conv_col] == True].dropna(subset=[bp_col])
+        keep_col = conv_col.replace("_converged", "_bp_reliable")
+        keep_col = keep_col if keep_col in bs.columns else conv_col
+        conv = bs[bs[keep_col] == True].dropna(subset=[bp_col])
         if conv.empty:
             continue
 
@@ -559,7 +673,9 @@ def plot_breakpoint_retest(bs: pd.DataFrame, out_dir: Path) -> None:
         ("temp_breakpoint", "temp_converged", "Barn-temp breakpoint", " °C",
          "retest_breakpoint_temp"),
     ]:
-        d = bs[bs[conv_col] == True].dropna(subset=[bp_col])[
+        keep_col = conv_col.replace("_converged", "_bp_reliable")
+        keep_col = keep_col if keep_col in bs.columns else conv_col
+        d = bs[bs[keep_col] == True].dropna(subset=[bp_col])[
             ["animal_id", "year", bp_col]].copy()
         d["year"] = d["year"].astype(int)
 
