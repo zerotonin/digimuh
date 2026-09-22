@@ -38,7 +38,7 @@ analysis = [
     "scipy",
     "scikit-learn",
     "statsmodels",
-    "rerandomstats >= 0.2.0",
+    "rerandomstats >= 0.3.0",
     "plotly",
     "kaleido",
     "openpyxl",
@@ -58,7 +58,7 @@ dev = [
     "scipy",
     "scikit-learn",
     "statsmodels",
-    "rerandomstats >= 0.2.0",
+    "rerandomstats >= 0.3.0",
     "ruff >= 0.4",
     # Runtime deps the analysis path actually uses.  Without these the test
     # run silently exercises import-error fallbacks instead of the code a

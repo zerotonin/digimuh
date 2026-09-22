@@ -26,10 +26,10 @@ jobs:
       - name: Install package + dev dependencies
         run: |
           python -m pip install --upgrade pip
-          # rerandomstats is not on PyPI — install from the v0.2.0 git tag
+          # rerandomstats is not on PyPI — install from the v0.3.0 git tag
           # BEFORE the editable install so pip's dependency resolver finds it
-          # locally when it processes the `rerandomstats >= 0.2.0` constraint.
-          pip install "git+https://github.com/zerotonin/reRandomStats.git@v0.2.0"
+          # locally when it processes the `rerandomstats >= 0.3.0` constraint.
+          pip install "git+https://github.com/zerotonin/reRandomStats.git@v0.3.0"
           pip install -e ".[dev]"
 
       - name: Lint with ruff

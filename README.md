@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20389794.svg)](https://doi.org/10.5281/zenodo.20389794)
-[![Uses reRandomStats](https://img.shields.io/badge/uses-reRandomStats%20v0.2.0-009E73.svg)](https://doi.org/10.5281/zenodo.20387255)
+[![Uses reRandomStats](https://img.shields.io/badge/uses-reRandomStats%20v0.3.0-009E73.svg)](https://github.com/zerotonin/reRandomStats/releases/tag/v0.3.0)
 
 **DigiMuh** consolidates ~8.9 GB of heterogeneous dairy-cow CSV sensor data into
 a single normalised SQLite database.  The data spans 3.5 years (April 2021 –
@@ -47,9 +47,10 @@ conda env create -f environment.yml
 conda activate digimuh
 
 # Option B: pip
-# reRandomStats is not on PyPI — install it from the v0.2.0 git tag first,
-# then the editable install picks it up locally to satisfy the dependency.
-pip install "git+https://github.com/zerotonin/reRandomStats.git@v0.2.0"
+# reRandomStats is not on PyPI — install it from the v0.3.0 git tag first
+# (the continuous broken-stick fit needs >= 0.3.0), then the editable
+# install picks it up locally to satisfy the dependency.
+pip install "git+https://github.com/zerotonin/reRandomStats.git@v0.3.0"
 pip install -e ".[dev]"
 ```
 

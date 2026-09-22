@@ -7,7 +7,7 @@
 # ║  Davies / pscore / Hill fits, Spearman correlations, below /     ║
 # ║  above-breakpoint means, and Fisher resampling tests with        ║
 # ║  BH-FDR correction.  The four fitters and the FDR routine        ║
-# ║  themselves live in reRandomStats (>= 0.2.0); this module        ║
+# ║  themselves live in reRandomStats (>= 0.3.0); this module        ║
 # ║  contains only the DigiMuh-specific wiring.                      ║
 # ╚══════════════════════════════════════════════════════════════════╝
 """Core statistical functions for the broken-stick analysis pipeline."""
