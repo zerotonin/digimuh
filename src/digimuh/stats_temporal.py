@@ -506,6 +506,7 @@ def compute_event_triggered_average(
 def compute_crossing_times(
     rumen: pd.DataFrame, bs_results: pd.DataFrame,
     min_gap: int = 6,
+    exclude_unreliable: bool = True,
 ) -> pd.DataFrame:
     """Extract clock times of all breakpoint crossing events.
 
@@ -517,6 +518,9 @@ def compute_crossing_times(
         rumen: rumen_barn.csv DataFrame.
         bs_results: broken_stick_results.csv DataFrame.
         min_gap: Minimum samples between events (default 6 = 1 hour).
+        exclude_unreliable: Skip cow-summers whose breakpoint is flagged
+            unreliable (``<predictor>_bp_reliable`` False), so unidentified
+            fits do not contribute spurious crossings.
 
     Returns:
         DataFrame with columns: animal_id, year, predictor, breakpoint,
@@ -531,7 +535,10 @@ def compute_crossing_times(
         ("thi", "barn_thi", "thi_converged", "thi_breakpoint"),
         ("temp", "barn_temp", "temp_converged", "temp_breakpoint"),
     ]:
-        converged = bs_results[bs_results[conv_col] == True]
+        rel_col = f"{prefix}_bp_reliable"
+        keep_col = (rel_col if exclude_unreliable and rel_col in bs_results.columns
+                    else conv_col)
+        converged = bs_results[bs_results[keep_col] == True]
 
         for _, row in converged.iterrows():
             aid = int(row["animal_id"])
@@ -577,6 +584,99 @@ def compute_crossing_times(
                 })
 
     return pd.DataFrame(records)
+
+
+# ─────────────────────────────────────────────────────────────
+#  « heat-load dose: minutes above the individual breakpoint »
+#
+#  The crossing *count* asks how often the threshold is crossed;
+#  this asks how *long* the climate sat above it — the cumulative
+#  exposure a cow actually experienced.  Time is integrated over
+#  the gaps between consecutive readings, gaps longer than
+#  ``gap_cap_min`` treated as monitoring interruptions (not
+#  exposure) so a sensor outage does not masquerade as heat load.
+# ─────────────────────────────────────────────────────────────
+
+def compute_minutes_over_breakpoint(
+    rumen: pd.DataFrame, bs_results: pd.DataFrame,
+    gap_cap_min: float = 30.0,
+    exclude_unreliable: bool = True,
+) -> pd.DataFrame:
+    """Minutes the barn climate stayed above each cow's breakpoint, per summer.
+
+    Args:
+        rumen:              rumen_barn.csv DataFrame.
+        bs_results:         broken_stick_results.csv DataFrame.
+        gap_cap_min:        Inter-reading gaps longer than this (minutes) are
+                            monitoring interruptions and contribute no exposure.
+        exclude_unreliable: Drop cow-summers whose breakpoint is flagged
+                            unreliable (``<predictor>_bp_reliable`` False) or
+                            degenerate (fraction of readings above the knee
+                            over :data:`BP_FRACTION_ABOVE_MAX`).  These are the
+                            unidentified fits that inflate the dose.
+
+    Returns:
+        Long DataFrame, one row per retained cow-summer and predictor:
+        ``animal_id, year, predictor, breakpoint, n_readings,
+        n_readings_above, minutes_over, hours_over, fraction_above``.
+    """
+    from digimuh.constants import BP_FRACTION_ABOVE_MAX
+
+    rumen = rumen.copy()
+    rumen["timestamp"] = pd.to_datetime(rumen["timestamp"])
+    frames = []
+
+    for prefix, env_col, conv_col, bp_col in [
+        ("thi", "barn_thi", "thi_converged", "thi_breakpoint"),
+        ("temp", "barn_temp", "temp_converged", "temp_breakpoint"),
+    ]:
+        rel_col = f"{prefix}_bp_reliable"
+        keep_col = (rel_col if exclude_unreliable and rel_col in bs_results.columns
+                    else conv_col)
+        conv = bs_results.loc[bs_results[keep_col] == True,  # noqa: E712
+                              ["animal_id", "year", bp_col]].dropna()
+        if conv.empty:
+            continue
+
+        r = rumen.merge(conv, on=["animal_id", "year"], how="inner")
+        r = r.sort_values(["animal_id", "year", "timestamp"])
+
+        # Minutes to the *next* reading within a cow-summer, gaps capped so a
+        # monitoring outage does not read as heat exposure.
+        nxt = r.groupby(["animal_id", "year"])["timestamp"].shift(-1)
+        dt = (nxt - r["timestamp"]).dt.total_seconds().div(60.0)
+        dt = dt.clip(upper=gap_cap_min).fillna(0.0)
+
+        above = r[env_col] > r[bp_col]
+        r = r.assign(_minutes=dt.where(above, 0.0),
+                     _above=above.astype(int), _one=1)
+        agg = r.groupby(["animal_id", "year"], as_index=False).agg(
+            breakpoint=(bp_col, "first"),
+            n_readings=("_one", "sum"),
+            n_readings_above=("_above", "sum"),
+            minutes_over=("_minutes", "sum"),
+        )
+        agg = agg[agg["n_readings"] >= 50].copy()
+        agg["fraction_above"] = (agg["n_readings_above"] / agg["n_readings"]).round(4)
+        if exclude_unreliable:
+            n_drop = int((agg["fraction_above"] > BP_FRACTION_ABOVE_MAX).sum())
+            if n_drop:
+                log.info("  minutes-over: dropped %d degenerate %s fits "
+                         "(>%.0f%% of readings above knee)",
+                         n_drop, prefix, 100 * BP_FRACTION_ABOVE_MAX)
+            agg = agg[agg["fraction_above"] <= BP_FRACTION_ABOVE_MAX]
+        agg["predictor"] = prefix
+        agg["hours_over"] = (agg["minutes_over"] / 60.0).round(2)
+        agg["minutes_over"] = agg["minutes_over"].round(1)
+        frames.append(agg[["animal_id", "year", "predictor", "breakpoint",
+                           "n_readings", "n_readings_above",
+                           "minutes_over", "hours_over", "fraction_above"]])
+
+    return (pd.concat(frames, ignore_index=True) if frames
+            else pd.DataFrame(columns=["animal_id", "year", "predictor",
+                                       "breakpoint", "n_readings",
+                                       "n_readings_above", "minutes_over",
+                                       "hours_over", "fraction_above"]))
 
 
 # ─────────────────────────────────────────────────────────────
