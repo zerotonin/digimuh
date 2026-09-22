@@ -136,8 +136,15 @@ MPL_STYLE = "seaborn-v0_8-whitegrid"
 #  Broken-stick fit defaults
 # ─────────────────────────────────────────────────────────────────
 
-THI_RANGE  = (45, 80)
-"""Default x_range for THI → body temp fits."""
+THI_RANGE  = (45, 82)
+"""Default x_range for THI → body temp fits.
+
+The upper bound sits at the 99.5th percentile of barn THI (81.9; max
+84.1), so a breakpoint pinned at the bound is a genuinely right-censored
+fit rather than an artefact of a window narrower than the data.  With
+the earlier bound of 80 the continuous fit piled a tenth of the cohort
+at the edge.
+"""
 
 TEMP_RANGE = (5, 35)
 """Default x_range for barn temp → body temp fits."""
