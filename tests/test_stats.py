@@ -381,3 +381,27 @@ def test_model_comparison_prefers_threshold_over_linear():
     assert bs_row["lowest_aic_share_pct"] == 100.0
     assert lin_row["pct_beaten_by_broken_stick"] == 100.0
     assert lin_row["median_delta_aic_vs_broken_stick"] > 2      # decisive
+
+
+# ─────────────────────────────────────────────────────────────
+#  breakpoint fit quality control
+# ─────────────────────────────────────────────────────────────
+
+def test_flag_unreliable_breakpoints():
+    from digimuh.stats_core import flag_unreliable_breakpoints
+
+    bs = pd.DataFrame({
+        "animal_id": [1, 2, 3, 4, 5, 6],
+        "year": [2024] * 6,
+        # 1: good fit; 2: wide CI; 3: lower-edge; 4: negative slope;
+        # 5: not converged; 6: high threshold with upper-CI truncated at 80
+        # (a heat-tolerant cow — must stay reliable, not flagged)
+        "thi_breakpoint":        [72.0, 55.0, 45.5, 70.0, 68.0, 79.5],
+        "thi_breakpoint_ci_lo":  [70.0, 55.0, 44.0, 68.0, 60.0, 78.0],
+        "thi_breakpoint_ci_hi":  [74.0, 78.0, 47.0, 72.0, 76.0, 80.0],
+        "thi_breakpoint_ci_truncated": [False, False, False, False, False, True],
+        "thi_slope_below":       [0.005, 0.01, 0.01, -0.05, 0.01, 0.02],
+        "thi_converged":         [True, True, True, True, False, True],
+    })
+    out = flag_unreliable_breakpoints(bs)
+    assert list(out["thi_bp_reliable"]) == [True, False, False, False, False, True]
