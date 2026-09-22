@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 from pathlib import Path
 
 import numpy as np
@@ -27,6 +28,7 @@ from digimuh.paths import resolve_input
 from digimuh.viz_breakpoints import (
     plot_bodytemp_vs_resp_scatter,
     plot_climate,
+    plot_example_pair,
     plot_examples,
     plot_grouped_boxplots,
     plot_paired_below_above,
@@ -63,6 +65,9 @@ log = logging.getLogger("digimuh.viz")
 
 
 def main() -> None:
+    # Headless by default (detached runs, CI, SLURM): without a display
+    # matplotlib falls back to a Qt backend and aborts the whole stage.
+    os.environ.setdefault("MPLBACKEND", "Agg")
     parser = argparse.ArgumentParser(description="Generate broken-stick analysis figures")
     parser.add_argument("--data", type=Path, required=True,
                         help="Directory with CSVs from extract + stats steps")
@@ -123,6 +128,8 @@ def main() -> None:
         )
 
     _plot_calls = [
+        ("Example pair (well- vs poorly-determined)",
+         lambda: plot_example_pair(rumen, bs, d)),
         ("Grouped boxplots", lambda: plot_grouped_boxplots(bs, d)),
         ("Paired below/above", lambda: plot_paired_below_above(beh, tests, d)),
         ("Paired rumen vs resp", lambda: plot_paired_rumen_vs_resp(bs, d)),

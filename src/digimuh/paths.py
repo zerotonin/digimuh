@@ -56,6 +56,8 @@ _STEM_TO_SUBJECT: dict[str, str] = {
     "climate_daily":            "extract",
     "calvings":                 "extract",
     "mlp_test_days":            "extract",
+    "filter_counts":            "extract",
+    "filter_counts_summary":    "extract",
 
     # ── 02 breakpoints ────────────────────────────────────
     "broken_stick_results":     "breakpoints",
@@ -65,6 +67,9 @@ _STEM_TO_SUBJECT: dict[str, str] = {
     "summary_table":            "breakpoints",
     "scatter_thi_vs_temp":      "breakpoints",
     "scatter_bodytemp_vs_resp_bp": "breakpoints",
+    "fraction_below_breakpoint": "breakpoints",
+    "breakpoint_percentiles":   "breakpoints",
+    "example_pair_fits":        "breakpoints",
 
     # ── 03 temporal ───────────────────────────────────────
     "circadian_null_model":         "temporal",
@@ -123,6 +128,8 @@ _STEM_TO_SUBJECT: dict[str, str] = {
     "breakpoint_model_aic_comparison":  "longitudinal",
     "breakpoint_model_aic_peranimal":   "longitudinal",
     "breakpoint_model_aic_population":  "longitudinal",
+    "convergence_rates":                "longitudinal",
+    "convergence_audit":                "longitudinal",
 
     # ── 07 annual yield ───────────────────────────────────
     "annual_zscores":                   "annual",
@@ -140,6 +147,7 @@ _PREFIX_RULES: tuple[tuple[str, str], ...] = (
     ("paired_below_above_",      "breakpoints"),
     ("predictors_",              "breakpoints"),
     ("broken_stick_results_",    "breakpoints"),
+    ("refit_diff_",              "breakpoints"),
 
     # temporal
     ("thi_daily_profile_",       "temporal"),
@@ -169,6 +177,7 @@ _PREFIX_RULES: tuple[tuple[str, str], ...] = (
     ("retest_breakpoint_",        "longitudinal"),
     ("breakpoint_icc_",          "longitudinal"),
     ("breakpoint_stability_",    "longitudinal"),
+    ("ci_overlap_",              "longitudinal"),
 
     # annual yield
     ("lines_yield_",             "annual"),
