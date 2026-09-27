@@ -66,6 +66,7 @@ from digimuh.stats_temporal import (
     compute_minutes_over_breakpoint,
     compute_thi_daily_profile,
 )
+from digimuh.stats_within_cow import compute_all_within_cow_posthoc
 
 log = logging.getLogger("digimuh.stats")
 
@@ -382,6 +383,15 @@ def main() -> None:
     minutes_over = compute_minutes_over_breakpoint(rumen, bs)
     minutes_over.to_csv(
         resolve_output(d, "minutes_over_breakpoint.csv"), index=False)
+
+    # Pairwise summer contrasts that stay inside the cow (sign-flip, BH-FDR)
+    posthoc = compute_all_within_cow_posthoc(bs, crossing_times, minutes_over)
+    posthoc.to_csv(
+        resolve_output(d, "posthoc_within_cow_permutation.csv"), index=False)
+    if not posthoc.empty:
+        kv("Within-cow pairwise contrasts",
+           f"{len(posthoc)} tests, "
+           f"{int((posthoc['p_value_fdr'] < 0.05).sum())} significant (BH-FDR)")
 
     if not crossing_times.empty:
         for pred in ["thi", "temp"]:

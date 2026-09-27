@@ -45,6 +45,7 @@ from digimuh.viz_correlation import (
     plot_event_triggered_average,
 )
 from digimuh.viz_longitudinal import (
+    collect_across_summer_tests,
     plot_breakpoint_icc,
     plot_breakpoint_raincloud,
     plot_breakpoint_retest,
@@ -159,6 +160,7 @@ def main() -> None:
         ("Breakpoint ICC forest", lambda: plot_breakpoint_icc(d)),
         ("Longitudinal Sankey", lambda: plot_longitudinal_sankey(bs, d)),
         ("Sankey diagrams", lambda: plot_threshold_sankey(bs, d)),
+        ("Across-summer test table", lambda: collect_across_summer_tests(d)),
     ]
 
     for name, fn in _plot_calls:

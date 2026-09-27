@@ -130,6 +130,8 @@ _STEM_TO_SUBJECT: dict[str, str] = {
     "breakpoint_model_aic_population":  "longitudinal",
     "convergence_rates":                "longitudinal",
     "convergence_audit":                "longitudinal",
+    "posthoc_within_cow_permutation":   "longitudinal",
+    "across_summer_repeated_measures":  "longitudinal",
 
     # ── 07 annual yield ───────────────────────────────────
     "annual_zscores":                   "annual",
