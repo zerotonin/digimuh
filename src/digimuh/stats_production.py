@@ -492,7 +492,16 @@ def daily_climate_vs_yield_correlations(
             rs=float(rs), p=float(p),
             slope=float(slope), intercept=float(intercept),
         ))
-    return pd.DataFrame(rows)
+    out = pd.DataFrame(rows)
+    # The two predictors form one BH-FDR family; consumers report p_fdr.
+    if not out.empty:
+        from rerandomstats import correct_pvalues_array
+        out["p_fdr"] = np.nan
+        ok = out["p"].notna()
+        if ok.any():
+            out.loc[ok, "p_fdr"] = correct_pvalues_array(
+                out.loc[ok, "p"].to_numpy(), method="fdr_bh")
+    return out
 
 
 # ─────────────────────────────────────────────────────────────
