@@ -20,6 +20,7 @@ import pandas as pd
 from digimuh.constants import COLOURS, RESAMPLING_SEED
 from digimuh.paths import resolve_input, resolve_output
 from digimuh.stats_longitudinal import across_summer_test, format_across_summer
+from digimuh.stats_within_cow import compute_within_cow_posthoc
 from digimuh.viz_base import add_significance_bracket, save_figure, setup_figure
 
 log = logging.getLogger("digimuh.viz")
@@ -181,32 +182,6 @@ def plot_longitudinal_breakpoints(bs: pd.DataFrame, out_dir: Path) -> None:
 #  « post-hoc helpers for the per-year rainclouds »
 # ─────────────────────────────────────────────────────────────
 
-def _posthoc_pairwise(year_data: list, years: list,
-                      *, test: str = "Fisher:medianDiff",
-                      combination_n: int = 20_000):
-    """All pairwise year comparisons with BH-FDR via MultiGroupTest.
-
-    The omnibus Kruskal-Wallis only says *some* year differs; this is the
-    follow-up that says *which* pairs.  Returns the reRandomStats result
-    frame (groupA/groupB, n, raw + corrected p, ``h``, ``sig. level``),
-    or ``None`` when fewer than two years carry enough data.
-    """
-    from rerandomstats import MultiGroupTest
-    flat: list[float] = []
-    labels: list[str] = []
-    for y, vals in zip(years, year_data):
-        v = np.asarray(vals, dtype=float)
-        v = v[np.isfinite(v)]
-        if v.size >= 3:
-            flat.extend(v.tolist())
-            labels.extend([str(int(y))] * v.size)
-    if len(set(labels)) < 2:
-        return None
-    return MultiGroupTest(data=flat, group=labels, test=test,
-                          combination_n=combination_n,
-                          correction_type="fdr_bh", seed=RESAMPLING_SEED).main()
-
-
 def _compact_letters(years: list, posthoc) -> dict[str, str]:
     """Compact letter display from a MultiGroupTest result frame.
 
@@ -241,27 +216,36 @@ def _compact_letters(years: list, posthoc) -> dict[str, str]:
     return {lab: "".join(sorted(letters[lab])) for lab in labels}
 
 
-def _annotate_posthoc(ax, year_data: list, years: list, fname: str,
-                      out_dir: Path) -> None:
-    """Run pairwise post-hoc, draw a compact letter display, write CSV.
+def _annotate_posthoc(ax, long: pd.DataFrame, years: list, fname: str,
+                      out_dir: Path, *, metric: str, predictor: str) -> None:
+    """Within-cow pairwise post-hoc, compact letter display, CSV.
 
-    Shared by both per-year rainclouds.  Years sharing a letter are not
-    significantly different (Fisher resampling, BH-FDR).
+    Shared by the per-year rainclouds.  The contrasts are paired sign-flip
+    permutations on within-cow differences (repeated-measures valid, unlike
+    a pooled resampling of cow-summers), BH-FDR corrected over the pairs of
+    one figure.  Years sharing a letter are not significantly different;
+    pairs with too few cows in both summers are left untested and share
+    letters by default.
+
+    Args:
+        long: One row per cow-summer with ``animal_id``, ``year``, ``value``.
     """
-    posthoc = _posthoc_pairwise(year_data, years)
-    if posthoc is None:
+    posthoc = compute_within_cow_posthoc(long, metric=metric, predictor=predictor)
+    if posthoc.empty:
         return
+    posthoc["h"] = posthoc["p_value_fdr"] < 0.05
     cld = _compact_letters(years, posthoc)
     for i, y in enumerate(years):
         ax.text(1.01, i, cld.get(str(int(y)), ""),
                 transform=ax.get_yaxis_transform(), ha="left", va="center",
                 fontsize=11, fontweight="bold", color="#333")
     ax.text(0.01, 0.02,
-            "letters: post-hoc groups (Fisher resampling, BH-FDR; "
-            "shared letter = n.s.)",
+            "letters: within-cow sign-flip permutation, BH-FDR "
+            "(shared letter = n.s.)",
             transform=ax.transAxes, ha="left", va="bottom",
             fontsize=7, color="#666")
-    posthoc.to_csv(resolve_output(out_dir, f"{fname}_posthoc.csv"), index=False)
+    posthoc.drop(columns="h").to_csv(
+        resolve_output(out_dir, f"{fname}_posthoc.csv"), index=False)
 
 
 def _write_year_summary(year_data: list, years: list, fname: str,
@@ -301,6 +285,27 @@ def _write_across_summer_test(res: dict, fname: str, out_dir: Path) -> None:
     """Write the repeated-measures across-summer test as ``<fname>_across_summer_test.csv``."""
     pd.DataFrame([res]).to_csv(
         resolve_output(out_dir, f"{fname}_across_summer_test.csv"), index=False)
+
+
+def collect_across_summer_tests(out_dir: Path) -> pd.DataFrame:
+    """Gather the per-figure across-summer tests into one table.
+
+    The rainclouds each write ``<figure>_across_summer_test.csv``; this
+    stacks them into ``across_summer_repeated_measures.csv`` so the
+    manuscript table (mixed model / GEE, weighted GEE, Kruskal-Wallis per
+    outcome) comes from one file.
+    """
+    folder = resolve_output(out_dir, "across_summer_repeated_measures.csv").parent
+    frames = []
+    for path in sorted(folder.glob("raincloud_*_across_summer_test.csv")):
+        df = pd.read_csv(path)
+        df.insert(0, "figure", path.name.replace("_across_summer_test.csv", ""))
+        frames.append(df)
+    out = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    out.to_csv(resolve_output(out_dir, "across_summer_repeated_measures.csv"),
+               index=False)
+    log.info("  across-summer table: %d outcomes", len(out))
+    return out
 
 
 # ─────────────────────────────────────────────────────────────
@@ -407,9 +412,10 @@ def plot_breakpoint_raincloud(out_dir: Path) -> None:
                               facecolor="white", alpha=0.8))
             _write_across_summer_test(res, fname, out_dir)
 
-        # Post-hoc: pairwise years (Fisher resampling, BH-FDR) + CLD
-        _annotate_posthoc(ax, year_data, years,
-                          f"raincloud_crossing_count_{pred}", out_dir)
+        # Post-hoc: pairwise years within cow (sign-flip, BH-FDR) + CLD
+        _annotate_posthoc(ax, counts.rename(columns={"n_crossings": "value"}),
+                          years, f"raincloud_crossing_count_{pred}", out_dir,
+                          metric="crossing_count", predictor=pred)
         _write_year_summary(year_data, years,
                             f"raincloud_crossing_count_{pred}", out_dir)
 
@@ -519,7 +525,9 @@ def plot_minutes_over_breakpoint_raincloud(out_dir: Path) -> None:
                               facecolor="white", alpha=0.8))
             _write_across_summer_test(res, fname, out_dir)
 
-        _annotate_posthoc(ax, year_data, years, fname, out_dir)
+        _annotate_posthoc(ax, sub.rename(columns={"minutes_over": "value"}),
+                          years, fname, out_dir,
+                          metric="minutes_over", predictor=pred)
         _write_year_summary(year_data, years, fname, out_dir)
 
         ax.set_yticks(range(len(years)))
@@ -635,8 +643,12 @@ def plot_breakpoint_value_raincloud(bs: pd.DataFrame, out_dir: Path) -> None:
                               facecolor="white", alpha=0.8))
             _write_across_summer_test(res, fname, out_dir)
 
-        # Post-hoc: pairwise years (Fisher resampling, BH-FDR) + CLD
-        _annotate_posthoc(ax, year_data, years, fname, out_dir)
+        # Post-hoc: pairwise years within cow (sign-flip, BH-FDR) + CLD
+        _annotate_posthoc(ax, conv[["animal_id", "year", bp_col]]
+                          .rename(columns={bp_col: "value"}),
+                          years, fname, out_dir,
+                          metric="breakpoint_value",
+                          predictor=bp_col.split("_")[0])
         _write_year_summary(year_data, years, fname, out_dir)
 
         ax.set_yticks(range(len(years)))
