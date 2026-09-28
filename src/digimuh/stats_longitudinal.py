@@ -44,6 +44,11 @@ def _icc_one_way(values: np.ndarray, groups: np.ndarray,
     unbalanced-design correction k0 from McGraw & Wong (1996).
     The 95% CI is derived from the F-distribution of MS_b / MS_w.
 
+    ``p`` is the **two-sided** p-value of H0: ICC = 0, so that it agrees
+    with the two-sided confidence interval: p < alpha exactly when the
+    interval excludes zero.  The one-sided value (alternative ICC > 0),
+    which is what the ANOVA F-test reports, is kept as ``p_one_sided``.
+
     Returns ``None`` when the data are too sparse (K<3 groups or
     df_w <= 0) or when MS_within is exactly zero (degenerate).
     """
@@ -74,7 +79,8 @@ def _icc_one_way(values: np.ndarray, groups: np.ndarray,
     icc = (ms_b - ms_w) / (ms_b + (k0 - 1.0) * ms_w)
 
     F0 = ms_b / ms_w
-    p = float(f_dist.sf(F0, df_b, df_w))
+    p_upper = float(f_dist.sf(F0, df_b, df_w))
+    p = min(1.0, 2.0 * min(p_upper, 1.0 - p_upper))
     f_lo = F0 / float(f_dist.ppf(1.0 - alpha / 2.0, df_b, df_w))
     f_hi = F0 * float(f_dist.ppf(1.0 - alpha / 2.0, df_w, df_b))
     icc_lo = (f_lo - 1.0) / (f_lo + k0 - 1.0)
@@ -88,6 +94,7 @@ def _icc_one_way(values: np.ndarray, groups: np.ndarray,
         "df1": int(df_b),
         "df2": int(df_w),
         "p": p,
+        "p_one_sided": p_upper,
         "n_animals": K,
         "n_obs": N,
         "k_mean": float(k0),
@@ -240,7 +247,10 @@ def _icc_measurement_corrected(values: np.ndarray, groups: np.ndarray,
         "f": raw["f"],
         "df1": df_b,
         "df2": df_w,
-        "p": raw["p"],  # Note: p still tests raw H0 (between > 0)
+        # p tests the raw H0 (ICC = 0, two-sided); the correction changes
+        # the estimate and its interval, not the test of between-cow variance
+        "p": raw["p"],
+        "p_one_sided": raw["p_one_sided"],
         "n_animals": K,
         "n_obs": N,
         "k_mean": k0,

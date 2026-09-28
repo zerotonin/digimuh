@@ -528,3 +528,21 @@ def test_icc_and_aic_exclude_unidentified_fits():
     per_animal, _ = compute_model_comparison(bs, "thi")
     assert len(per_animal) == 22
     assert 0 not in set(per_animal["animal_id"])
+
+
+@pytest.mark.parametrize("between_sd", [0.0, 0.6, 1.0, 3.0])
+def test_icc_p_value_is_two_sided_and_agrees_with_the_interval(between_sd):
+    """p < 0.05 exactly when the two-sided 95 % interval excludes zero."""
+    from digimuh.stats_longitudinal import _icc_one_way
+
+    rng = np.random.default_rng(11)
+    cows = np.repeat(np.arange(60), 2)
+    values = (75.0 + np.repeat(rng.normal(0, between_sd, 60), 2)
+              + rng.normal(0, 2.0, cows.size))
+    res = _icc_one_way(values, cows)
+    excludes_zero = res["ci_lower"] > 0 or res["ci_upper"] < 0
+    assert (res["p"] < 0.05) == excludes_zero
+    assert 0.0 <= res["p"] <= 1.0
+    # two-sided is twice the smaller tail of the one-sided F-test
+    tail = min(res["p_one_sided"], 1.0 - res["p_one_sided"])
+    assert res["p"] == pytest.approx(min(1.0, 2.0 * tail))
