@@ -19,6 +19,7 @@ import pandas as pd
 
 from digimuh.constants import COLOURS, RESAMPLING_SEED
 from digimuh.paths import resolve_input, resolve_output
+from digimuh.stats_breakpoint_summary import reliable_fits
 from digimuh.stats_longitudinal import across_summer_test, format_across_summer
 from digimuh.stats_within_cow import compute_within_cow_posthoc
 from digimuh.viz_base import add_significance_bracket, save_figure, setup_figure
@@ -42,7 +43,8 @@ def plot_longitudinal_breakpoints(bs: pd.DataFrame, out_dir: Path) -> None:
         ("thi_breakpoint", "thi_converged", "THI breakpoint", "longitudinal_thi"),
         ("temp_breakpoint", "temp_converged", "Barn temp breakpoint (°C)", "longitudinal_temp"),
     ]:
-        conv = bs[bs[conv_col] == True].dropna(subset=[bp_col])
+        conv = reliable_fits(
+            bs, conv_col.replace("_converged", "")).dropna(subset=[bp_col])
         if conv.empty:
             log.info("  %s: no converged animals, skipping", fname)
             continue
@@ -845,7 +847,7 @@ def plot_breakpoint_icc(out_dir: Path,
         title_main = f"{title_main}  —  {title_suffix}"
     ax.set_title(
         f"{title_main}\n"
-        "(Shrout & Fleiss 1979 / McGraw & Wong 1996; multi-year converged subset)",
+        "(Shrout & Fleiss 1979 / McGraw & Wong 1996; multi-year identified fits)",
         fontsize=11, loc="left", pad=10,
     )
     ax.grid(False)
@@ -948,7 +950,8 @@ def plot_longitudinal_sankey(bs: pd.DataFrame, out_dir: Path) -> None:
         ("temp_breakpoint", "temp_converged", "Barn temp breakpoint",
          "sankey_longitudinal_temp"),
     ]:
-        conv = bs[bs[conv_col] == True].dropna(subset=[bp_col])
+        conv = reliable_fits(
+            bs, conv_col.replace("_converged", "")).dropna(subset=[bp_col])
         if conv.empty:
             continue
 

@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 from digimuh.constants import BREAKPOINT_SEARCH_WINDOW, COLOURS
+from digimuh.stats_breakpoint_summary import reliable_fits
 from digimuh.viz_base import add_significance_bracket, save_figure, setup_figure
 
 log = logging.getLogger("digimuh.viz")
@@ -417,7 +418,7 @@ def plot_predictors(bs: pd.DataFrame, out_dir: Path) -> None:
         ("thi_breakpoint", "THI breakpoint", "predictors_thi"),
         ("temp_breakpoint", "Barn temp breakpoint (°C)", "predictors_temp"),
     ]:
-        conv = bs[bs[f"{bp_col.split('_')[0]}_converged"] == True].dropna(subset=[bp_col])
+        conv = reliable_fits(bs, bp_col.split("_")[0]).dropna(subset=[bp_col])
         fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
         # Milk yield
