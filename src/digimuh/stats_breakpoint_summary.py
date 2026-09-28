@@ -63,6 +63,17 @@ def _reliable_column(bs: pd.DataFrame, predictor: str) -> str:
     return flag if flag in bs.columns else f"{predictor}_converged"
 
 
+def reliable_fits(bs: pd.DataFrame, predictor: str) -> pd.DataFrame:
+    """Cow-summers whose ``predictor`` breakpoint is identified.
+
+    The one cohort rule for every analysis that *uses* a breakpoint:
+    converged and not flagged unidentified by the fit quality control.
+    Falls back to ``<predictor>_converged`` where no flag exists
+    (respiration fits, result files written before the flag).
+    """
+    return bs[bs[_reliable_column(bs, predictor)] == True]
+
+
 def compute_fraction_below_breakpoint(rumen: pd.DataFrame, bs: pd.DataFrame,
                                       predictor: str = "thi") -> pd.DataFrame:
     """Share of paired readings at or below each cow's breakpoint.
