@@ -184,6 +184,41 @@ def plot_longitudinal_breakpoints(bs: pd.DataFrame, out_dir: Path) -> None:
 #  « post-hoc helpers for the per-year rainclouds »
 # ─────────────────────────────────────────────────────────────
 
+def _posthoc_group_medians(long: pd.DataFrame, years: list,
+                           combination_n: int = 20_000) -> pd.DataFrame | None:
+    """Pairwise permutation tests on the year medians, BH-FDR.
+
+    Asks how the herd moves between summers.  The statistic is the
+    difference of two year medians over all cows of each year; the null
+    distribution respects the cows measured in both summers, whose two
+    values are swapped together, while cows measured in one summer only
+    are shuffled between the years (reRandomStats
+    ``MultiGroupPairedTest``).  Returns ``None`` when fewer than two years
+    carry at least three values.
+
+    Args:
+        long: One row per cow-summer with ``animal_id``, ``year``, ``value``.
+    """
+    from rerandomstats import MultiGroupPairedTest
+
+    sub = long.dropna(subset=["value"])
+    counts = sub.groupby("year").size()
+    keep = [int(y) for y in years if counts.get(y, 0) >= 3]
+    if len(keep) < 2:
+        return None
+    sub = sub[sub["year"].isin(keep)].sort_values("year")
+    result = MultiGroupPairedTest(
+        data=sub["value"].astype(float).tolist(),
+        group=sub["year"].astype(int).astype(str).tolist(),
+        subject=sub["animal_id"].tolist(),
+        func="medianDiff", combination_n=combination_n,
+        correction_type="fdr_bh", seed=RESAMPLING_SEED).main()
+    medians = sub.groupby("year")["value"].median()
+    result["median_A"] = [float(medians[int(a)]) for a in result["groupA"]]
+    result["median_B"] = [float(medians[int(b)]) for b in result["groupB"]]
+    return result.rename(columns={"statistic": "median_diff"})
+
+
 def _compact_letters(years: list, posthoc) -> dict[str, str]:
     """Compact letter display from a MultiGroupTest result frame.
 
@@ -215,39 +250,60 @@ def _compact_letters(years: list, posthoc) -> dict[str, str]:
     for i, clique in enumerate(cliques):
         for lab in clique:
             letters[lab] += string.ascii_lowercase[i]
-    return {lab: "".join(sorted(letters[lab])) for lab in labels}
+    # Relabel so the letters run alphabetically from the first year down
+    order: dict[str, str] = {}
+    for lab in labels:
+        for ch in sorted(letters[lab]):
+            order.setdefault(ch, string.ascii_lowercase[len(order)])
+    return {lab: "".join(sorted(order[ch] for ch in letters[lab]))
+            for lab in labels}
 
 
 def _annotate_posthoc(ax, long: pd.DataFrame, years: list, fname: str,
-                      out_dir: Path, *, metric: str, predictor: str) -> None:
-    """Within-cow pairwise post-hoc, compact letter display, CSV.
+                      out_dir: Path, *, metric: str, predictor: str,
+                      level: str = "cow") -> None:
+    """Pairwise post-hoc between summers, compact letter display, CSV.
 
-    Shared by the per-year rainclouds.  The contrasts are paired sign-flip
-    permutations on within-cow differences (repeated-measures valid, unlike
-    a pooled resampling of cow-summers), BH-FDR corrected over the pairs of
-    one figure.  Years sharing a letter are not significantly different;
-    pairs with too few cows in both summers are left untested and share
-    letters by default.
+    Shared by the per-year rainclouds.  ``level`` selects the question:
+
+    * ``"cow"`` — did the same cow change?  Paired sign-flip permutation on
+      within-cow differences; pairs with too few cows in both summers are
+      left untested and share letters by default.
+    * ``"herd"`` — did the herd move?  Permutation test on the difference
+      of the year medians over all cows of each year, with a null
+      distribution that keeps the cows measured in both summers paired.
+
+    Both are BH-FDR corrected over the pairs of one figure, and years
+    sharing a letter are not significantly different.
 
     Args:
         long: One row per cow-summer with ``animal_id``, ``year``, ``value``.
     """
-    posthoc = compute_within_cow_posthoc(long, metric=metric, predictor=predictor)
-    if posthoc.empty:
-        return
-    posthoc["h"] = posthoc["p_value_fdr"] < 0.05
+    if level == "herd":
+        posthoc = _posthoc_group_medians(long, years)
+        if posthoc is None:
+            return
+        note = ("letters: paired permutation test on year medians, BH-FDR "
+                "(shared letter = n.s.)")
+        table = posthoc
+    else:
+        posthoc = compute_within_cow_posthoc(long, metric=metric,
+                                             predictor=predictor)
+        if posthoc.empty:
+            return
+        table = posthoc.copy()
+        posthoc["h"] = posthoc["p_value_fdr"] < 0.05
+        note = ("letters: within-cow sign-flip permutation, BH-FDR "
+                "(shared letter = n.s.)")
     cld = _compact_letters(years, posthoc)
     for i, y in enumerate(years):
         ax.text(1.01, i, cld.get(str(int(y)), ""),
                 transform=ax.get_yaxis_transform(), ha="left", va="center",
                 fontsize=11, fontweight="bold", color="#333")
-    ax.text(0.01, 0.02,
-            "letters: within-cow sign-flip permutation, BH-FDR "
-            "(shared letter = n.s.)",
+    ax.text(0.01, 0.02, note,
             transform=ax.transAxes, ha="left", va="bottom",
             fontsize=7, color="#666")
-    posthoc.drop(columns="h").to_csv(
-        resolve_output(out_dir, f"{fname}_posthoc.csv"), index=False)
+    table.to_csv(resolve_output(out_dir, f"{fname}_posthoc.csv"), index=False)
 
 
 def _write_year_summary(year_data: list, years: list, fname: str,
@@ -414,10 +470,11 @@ def plot_breakpoint_raincloud(out_dir: Path) -> None:
                               facecolor="white", alpha=0.8))
             _write_across_summer_test(res, fname, out_dir)
 
-        # Post-hoc: pairwise years within cow (sign-flip, BH-FDR) + CLD
+        # Post-hoc: how the herd's median moves between years + CLD
         _annotate_posthoc(ax, counts.rename(columns={"n_crossings": "value"}),
                           years, f"raincloud_crossing_count_{pred}", out_dir,
-                          metric="crossing_count", predictor=pred)
+                          metric="crossing_count", predictor=pred,
+                          level="herd")
         _write_year_summary(year_data, years,
                             f"raincloud_crossing_count_{pred}", out_dir)
 
@@ -447,8 +504,16 @@ def plot_minutes_over_breakpoint_raincloud(out_dir: Path) -> None:
     repeated-measures test is fitted on the above-threshold reading count
     (Poisson GEE clustered by cow), with Kruskal-Wallis as a sensitivity
     check; the axis shows the corresponding minutes.
+
+    The dose spans three orders of magnitude, so the axis is logarithmic
+    and the density is estimated on log10 minutes.  The letters answer the
+    herd-level question — how the year medians move — with a permutation
+    test on the medians that keeps repeat cows paired (BH-FDR); the
+    within-cow contrasts stay available in
+    ``posthoc_within_cow_permutation.csv``.
     """
     import matplotlib.pyplot as plt
+    from matplotlib.ticker import FuncFormatter
     from scipy.stats import gaussian_kde
     setup_figure()
 
@@ -474,7 +539,12 @@ def plot_minutes_over_breakpoint_raincloud(out_dir: Path) -> None:
         if len(years) < 2:
             continue
 
-        year_data = [sub[sub["year"] == y]["minutes_over"].to_numpy()
+        # A log axis cannot show zero; such cow-summers stay in the tests
+        drawn = sub[sub["minutes_over"] > 0]
+        if len(drawn) < len(sub):
+            log.info("  %s: %d cow-summers with zero minutes not drawn",
+                     fname, len(sub) - len(drawn))
+        year_data = [drawn[drawn["year"] == y]["minutes_over"].to_numpy()
                      for y in years]
 
         fig, ax = plt.subplots(figsize=(10, 1.5 + 1.4 * len(years)))
@@ -482,13 +552,13 @@ def plot_minutes_over_breakpoint_raincloud(out_dir: Path) -> None:
         for i, (y, vals) in enumerate(zip(years, year_data)):
             y_pos = i
             colour = COLOURS["year"].get(y, COLOURS["below_bp"])
-            span = max(vals.max() - vals.min(), 1.0)
 
             if len(vals) > 5 and np.ptp(vals) > 0:
-                kde = gaussian_kde(vals, bw_method=0.3)
-                x_kde = np.linspace(max(0, vals.min() - 0.05 * span),
-                                    vals.max() + 0.05 * span, 200)
-                density = kde(x_kde)
+                log_vals = np.log10(vals)
+                kde = gaussian_kde(log_vals, bw_method=0.3)
+                x_kde = np.logspace(log_vals.min() - 0.05,
+                                    log_vals.max() + 0.05, 200)
+                density = kde(np.log10(x_kde))
                 density_scaled = density / density.max() * 0.38
                 ax.fill_between(x_kde, y_pos, y_pos + density_scaled,
                                 alpha=0.3, color=colour)
@@ -510,9 +580,10 @@ def plot_minutes_over_breakpoint_raincloud(out_dir: Path) -> None:
                 manage_ticks=False,
             )
 
-            ax.text(0.0, y_pos - 0.38,
+            ax.text(0.005, y_pos - 0.38,
                     f"n={len(vals)}, median={np.median(vals):.0f} min",
-                    fontsize=8, color="#666", va="center")
+                    fontsize=8, color="#666", va="center",
+                    transform=ax.get_yaxis_transform())
 
         # Repeated-measures test on the above-threshold reading count
         counts = (sub.groupby(["animal_id", "year"])["n_readings_above"]
@@ -529,15 +600,19 @@ def plot_minutes_over_breakpoint_raincloud(out_dir: Path) -> None:
 
         _annotate_posthoc(ax, sub.rename(columns={"minutes_over": "value"}),
                           years, fname, out_dir,
-                          metric="minutes_over", predictor=pred)
+                          metric="minutes_over", predictor=pred, level="herd")
         _write_year_summary(year_data, years, fname, out_dir)
 
         ax.set_yticks(range(len(years)))
         ax.set_yticklabels([str(y) for y in years], fontsize=11)
-        ax.set_xlabel(f"Minutes above {pred_label} per animal")
+        ax.set_xscale("log")
+        ax.xaxis.set_major_formatter(
+            FuncFormatter(lambda v, _: f"{v:,.0f}".replace(",", " ")))
+        ax.set_xlim(drawn["minutes_over"].min() * 0.7,
+                    drawn["minutes_over"].max() * 1.4)
+        ax.set_xlabel(f"Minutes above {pred_label} per animal (log scale)")
         ax.set_title(f"Annual minutes above {pred_label} per animal",
                      fontsize=13, fontweight="bold")
-        ax.set_xlim(left=0)
         ax.invert_yaxis()
         fig.tight_layout()
         save_figure(fig, fname, out_dir)
@@ -645,12 +720,12 @@ def plot_breakpoint_value_raincloud(bs: pd.DataFrame, out_dir: Path) -> None:
                               facecolor="white", alpha=0.8))
             _write_across_summer_test(res, fname, out_dir)
 
-        # Post-hoc: pairwise years within cow (sign-flip, BH-FDR) + CLD
+        # Post-hoc: how the herd's median moves between years + CLD
         _annotate_posthoc(ax, conv[["animal_id", "year", bp_col]]
                           .rename(columns={bp_col: "value"}),
                           years, fname, out_dir,
                           metric="breakpoint_value",
-                          predictor=bp_col.split("_")[0])
+                          predictor=bp_col.split("_")[0], level="herd")
         _write_year_summary(year_data, years, fname, out_dir)
 
         ax.set_yticks(range(len(years)))
