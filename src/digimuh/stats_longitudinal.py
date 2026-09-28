@@ -19,6 +19,7 @@ from rerandomstats import correct_pvalues_array
 from scipy.stats import f as f_dist
 
 from digimuh.constants import RESAMPLING_SEED
+from digimuh.stats_breakpoint_summary import reliable_fits
 from digimuh.stats_core import p_to_stars
 
 log = logging.getLogger("digimuh.stats")
@@ -267,7 +268,8 @@ def compute_breakpoint_icc(bs_results: pd.DataFrame,
         skipped when not available.
 
     The cohort for each row is the subset of animals with at
-    least two converged breakpoints for that predictor.
+    least two identified breakpoints for that predictor (converged
+    and not flagged unidentified by the fit quality control).
 
     Returns one row per (predictor, mode) with point estimate,
     95% CI, F, df, p, n_animals, n_obs, mean k (the harmonic-
@@ -300,7 +302,7 @@ def compute_breakpoint_icc(bs_results: pd.DataFrame,
     for key, label, bp_col, conv_col, se_col in predictors:
         if bp_col not in bs_results.columns or conv_col not in bs_results.columns:
             continue
-        conv = bs_results[bs_results[conv_col] == True].dropna(subset=[bp_col]).copy()
+        conv = reliable_fits(bs_results, key).dropna(subset=[bp_col]).copy()
         if conv.empty:
             continue
         # Attach DIM, parity (lactation_nr) and mean yield once at the
@@ -701,7 +703,7 @@ def compute_stability(bs_results: pd.DataFrame) -> tuple[pd.DataFrame, float]:
     Returns:
         (pairs DataFrame, ICC value).
     """
-    conv = bs_results[bs_results["thi_converged"] == True]
+    conv = reliable_fits(bs_results, "thi")
     counts = conv.groupby("animal_id").size()
     repeats = counts[counts >= 2].index
 
@@ -780,7 +782,8 @@ def _run_longitudinal_tests(bs: pd.DataFrame, d: Path) -> None:
         ("thi_breakpoint", "thi_converged", "THI"),
         ("temp_breakpoint", "temp_converged", "Barn temp"),
     ]:
-        conv = bs[bs[conv_col] == True].dropna(subset=[bp_col])
+        conv = reliable_fits(
+            bs, conv_col.replace("_converged", "")).dropna(subset=[bp_col])
         if conv.empty:
             continue
 

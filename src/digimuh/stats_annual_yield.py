@@ -23,6 +23,7 @@ import logging
 import numpy as np
 import pandas as pd
 
+from digimuh.stats_breakpoint_summary import reliable_fits
 from digimuh.stats_lactation_curve import DIM_MAX, DIM_MIN, attach_dim
 
 log = logging.getLogger("digimuh.annual_yield")
@@ -198,7 +199,7 @@ def compute_heatstress_duration_deltas(
     """Yield change across runs of consecutive heat-stress days.
 
     A day is *heat-stress* for a cow when the barn's daily-maximum THI
-    reaches or exceeds that cow's individual (converged) THI breakpoint.
+    reaches or exceeds that cow's individual (identified) THI breakpoint.
     Within each cow-year we find maximal runs of consecutive calendar
     days that are all heat-stress, take the last non-stress day before
     the run as the baseline, and record the yield change on the 1st,
@@ -223,8 +224,7 @@ def compute_heatstress_duration_deltas(
         ``baseline_residual``, ``baseline_kg``, ``delta_residual``,
         ``delta_kg``, ``run_length``.
     """
-    bp = breakpoints.loc[
-        breakpoints["thi_converged"].astype(bool),
+    bp = reliable_fits(breakpoints, "thi")[
         ["animal_id", "year", "thi_breakpoint"]].copy()
 
     clim = climate_daily[["day", "barn_thi_max"]].copy()

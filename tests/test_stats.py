@@ -486,3 +486,45 @@ def test_run_broken_stick_fits_is_ungated_and_continuous(synthetic_rumen):
     assert conv["thi_pscore_p"].notna().all()
     assert (conv["thi_davies_p"] < 0.05).all()
     assert breakpoint_jump(bs, "thi").abs().max() < 1e-6
+
+
+def test_reliable_fits_is_the_cohort_rule():
+    """Identified fits only; falls back to converged where no flag exists."""
+    from digimuh.stats_breakpoint_summary import reliable_fits
+
+    bs = pd.DataFrame({
+        "animal_id": [1, 2, 3],
+        "thi_converged": [True, True, False],
+        "thi_bp_reliable": [True, False, False],
+        "resp_thi_converged": [True, True, False],
+    })
+    assert list(reliable_fits(bs, "thi")["animal_id"]) == [1]
+    assert list(reliable_fits(bs, "resp_thi")["animal_id"]) == [1, 2]
+
+
+def test_icc_and_aic_exclude_unidentified_fits():
+    """A flagged fit must not enter the ICC cohort or the AIC comparison."""
+    from digimuh.stats_longitudinal import compute_breakpoint_icc
+    from digimuh.stats_model_comparison import compute_model_comparison
+
+    rng = np.random.default_rng(5)
+    rows = []
+    for cow in range(12):
+        for year in (2021, 2022):
+            rows.append({
+                "animal_id": cow, "year": year, "n_readings": 400,
+                "thi_breakpoint": 75.0 + rng.normal(0, 1.5),
+                "thi_breakpoint_se": 0.3,
+                "thi_converged": True,
+                "thi_bp_reliable": cow != 0,          # cow 0 unidentified
+                "thi_linear_r2": 0.05, "thi_r_squared": 0.30,
+                "thi_hill_r2": 0.28,
+                "thi_slope_below": 0.01, "thi_slope_above": 0.08,
+            })
+    bs = pd.DataFrame(rows)
+    icc = compute_breakpoint_icc(bs)
+    raw = icc[(icc["predictor"] == "THI breakpoint") & (icc["mode"] == "raw")].iloc[0]
+    assert raw["n_animals"] == 11 and raw["n_obs"] == 22
+    per_animal, _ = compute_model_comparison(bs, "thi")
+    assert len(per_animal) == 22
+    assert 0 not in set(per_animal["animal_id"])

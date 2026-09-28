@@ -16,6 +16,8 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 
+from digimuh.stats_breakpoint_summary import reliable_fits
+
 log = logging.getLogger("digimuh.stats")
 
 def compute_thermoneutral_fraction(
@@ -39,7 +41,7 @@ def compute_thermoneutral_fraction(
         n_readings, mean_thi, mean_body_temp.
     """
     records = []
-    converged = bs_results[bs_results["thi_converged"] == True]
+    converged = reliable_fits(bs_results, "thi")
 
     for _, row in converged.iterrows():
         aid = int(row["animal_id"])

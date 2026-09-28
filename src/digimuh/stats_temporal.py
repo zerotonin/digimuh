@@ -16,6 +16,8 @@ import logging
 import numpy as np
 import pandas as pd
 
+from digimuh.stats_breakpoint_summary import reliable_fits
+
 log = logging.getLogger("digimuh.stats")
 
 def compute_cross_correlation(
@@ -49,7 +51,7 @@ def compute_cross_correlation(
         ("thi", "barn_thi", "thi_converged", "thi_breakpoint"),
         ("temp", "barn_temp", "temp_converged", "temp_breakpoint"),
     ]:
-        converged = bs_results[bs_results[conv_col] == True]
+        converged = reliable_fits(bs_results, conv_col.replace("_converged", ""))
 
         for _, row in converged.iterrows():
             aid = int(row["animal_id"])
@@ -168,7 +170,7 @@ def compute_circadian_null_model(
     rumen["date"] = rumen["timestamp"].dt.date
     rumen["hour"] = rumen["timestamp"].dt.hour
 
-    converged = bs_results[bs_results["thi_converged"] == True]
+    converged = reliable_fits(bs_results, "thi")
     records = []
 
     for _, row in converged.iterrows():
@@ -238,11 +240,11 @@ def compute_thi_daily_profile(
     month_names = {6: "June", 7: "July", 8: "August", 9: "September"}
 
     # Herd median THI breakpoint
-    thi_conv = bs_results[bs_results["thi_converged"] == True]
+    thi_conv = reliable_fits(bs_results, "thi")
     herd_median_bp = thi_conv["thi_breakpoint"].median() if not thi_conv.empty else np.nan
 
     # Herd median barn-temperature breakpoint (separate predictor).
-    temp_conv = bs_results[bs_results["temp_converged"] == True]
+    temp_conv = reliable_fits(bs_results, "temp")
     herd_median_temp_bp = (temp_conv["temp_breakpoint"].median()
                             if not temp_conv.empty else np.nan)
 
@@ -305,7 +307,7 @@ def compute_derivative_ccf(
         ("thi", "barn_thi", "thi_converged", "thi_breakpoint"),
         ("temp", "barn_temp", "temp_converged", "temp_breakpoint"),
     ]:
-        converged = bs_results[bs_results[conv_col] == True]
+        converged = reliable_fits(bs_results, conv_col.replace("_converged", ""))
 
         for _, row in converged.iterrows():
             aid = int(row["animal_id"])
@@ -415,7 +417,7 @@ def compute_event_triggered_average(
         ("thi", "barn_thi", "thi_converged", "thi_breakpoint"),
         ("temp", "barn_temp", "temp_converged", "temp_breakpoint"),
     ]:
-        converged = bs_results[bs_results[conv_col] == True]
+        converged = reliable_fits(bs_results, conv_col.replace("_converged", ""))
 
         for _, row in converged.iterrows():
             aid = int(row["animal_id"])
@@ -721,7 +723,7 @@ def compute_climate_eta(
         ("thi", "barn_thi", "thi_converged", "thi_breakpoint"),
         ("temp", "barn_temp", "temp_converged", "temp_breakpoint"),
     ]:
-        converged = bs_results[bs_results[conv_col] == True]
+        converged = reliable_fits(bs_results, conv_col.replace("_converged", ""))
 
         for _, row in converged.iterrows():
             aid = int(row["animal_id"])

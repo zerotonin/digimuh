@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 
 from digimuh.constants import RESAMPLING_SEED
+from digimuh.stats_breakpoint_summary import reliable_fits
 
 log = logging.getLogger("digimuh.stats")
 
@@ -66,8 +67,8 @@ def compute_model_comparison(
         with its lowest-AIC share, how often the broken-stick beats it,
         and the median ΔAIC in favour of the broken-stick.
     """
-    conv = bs[(bs[f"{predictor}_converged"] == True)  # noqa: E712
-              & bs[f"{predictor}_r_squared"].notna()].copy()
+    fits = reliable_fits(bs, predictor)
+    conv = fits[fits[f"{predictor}_r_squared"].notna()].copy()
     if conv.empty:
         return pd.DataFrame(), pd.DataFrame()
 
