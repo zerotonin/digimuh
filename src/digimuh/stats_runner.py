@@ -655,7 +655,8 @@ def main() -> None:
 
     # ── 8b. Repeatability ICC(1,1) — raw + parity/DIM-residualised ─
     section("Breakpoint repeatability ICC(1,1)",
-            "Multi-year converged animals; raw + parity+DIM-residualised")
+            "Multi-year identified fits; raw + parity+DIM-residualised; "
+            "p two-sided")
     wood_path = resolve_input(d, "daily_milk_yield_wood.csv")
     wood_yield = pd.read_csv(wood_path) if wood_path.exists() else pd.DataFrame()
     icc_df = compute_breakpoint_icc(bs, wood_yield=wood_yield)

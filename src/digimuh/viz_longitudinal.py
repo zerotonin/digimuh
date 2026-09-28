@@ -825,7 +825,8 @@ def plot_breakpoint_icc(out_dir: Path,
     ax.scatter(df["icc"], y, s=80, c=point_colours,
                edgecolors="white", linewidths=1.2, zorder=5)
 
-    # Right-side annotation: n animals / n obs / p
+    # Right-side annotation: n animals / n obs / two-sided p (H0: ICC = 0),
+    # which agrees with the two-sided interval drawn beside it
     for i, (_, r) in zip(y, df.iterrows()):
         sig = ""
         if pd.notna(r["p"]):
@@ -840,7 +841,8 @@ def plot_breakpoint_icc(out_dir: Path,
 
     ax.set_yticks(y)
     ax.set_yticklabels(df["row_label"], fontsize=10)
-    ax.set_xlabel("ICC(1,1)  —  point estimate ± 95% CI")
+    ax.set_xlabel("ICC(1,1)  —  point estimate ± 95% CI;  "
+                  "p two-sided, H₀: ICC = 0")
     ax.set_xlim(-1.05, 1.05)
     title_main = "Repeatability of individual cow breakpoints across summers"
     if title_suffix:
