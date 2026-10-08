@@ -56,6 +56,7 @@ from digimuh.stats_production import (
     compute_thermoneutral_fraction,
     compute_tnf_yield_analysis,
 )
+from digimuh.stats_retest import compute_retest_summary
 from digimuh.stats_temporal import (
     compute_circadian_null_model,
     compute_climate_eta,
@@ -652,6 +653,19 @@ def main() -> None:
     kv("ICC", f"{icc:.3f}")
     kv("Pairs", len(pairs))
     kv("Unique animals", pairs["animal_id"].nunique() if not pairs.empty else 0)
+
+    # ── 8a. Test-retest between consecutive summers ─────────
+    retest = compute_retest_summary(bs)
+    if not retest.empty:
+        retest.to_csv(resolve_output(d, "retest_breakpoint_summary.csv"),
+                      index=False)
+        for _, r in retest.iterrows():
+            kv(f"{r['predictor'].upper()} test-retest",
+               f"r = {r['pearson_r']:.2f} "
+               f"({r['pearson_ci_lo']:.2f} to {r['pearson_ci_hi']:.2f}), "
+               f"slope = {r['slope']:.2f} "
+               f"({r['slope_ci_lo']:.2f} to {r['slope_ci_hi']:.2f}), "
+               f"{int(r['n_pairs'])} pairs from {int(r['n_animals'])} cows")
 
     # ── 8b. Repeatability ICC(1,1) — raw + parity/DIM-residualised ─
     section("Breakpoint repeatability ICC(1,1)",
