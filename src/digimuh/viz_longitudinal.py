@@ -21,6 +21,10 @@ from digimuh.constants import COLOURS, RESAMPLING_SEED
 from digimuh.paths import resolve_input, resolve_output
 from digimuh.stats_breakpoint_summary import reliable_fits
 from digimuh.stats_longitudinal import across_summer_test, format_across_summer
+from digimuh.stats_retest import (
+    build_consecutive_pairs,
+    compute_retest_statistics,
+)
 from digimuh.stats_within_cow import compute_within_cow_posthoc
 from digimuh.viz_base import add_significance_bracket, save_figure, setup_figure
 
@@ -753,41 +757,27 @@ def plot_breakpoint_retest(bs: pd.DataFrame, out_dir: Path) -> None:
     Third companion to the per-year value and crossing-count rainclouds:
     each point is one cow's consecutive-summer pair (x = last summer,
     y = this summer), coloured by the later year.  The identity line is
-    perfect stability; the flat fitted line and near-zero r show the
-    breakpoint does not carry over between years.
+    perfect stability (slope 1); a flat fitted line means last summer
+    says nothing about this one (slope 0).  Pairs and statistics come from
+    :mod:`digimuh.stats_retest`, so the figure shows the numbers the stats
+    stage writes to ``retest_breakpoint_summary.csv``.
     """
     import matplotlib.pyplot as plt
-    from scipy import stats
     setup_figure()
 
-    for bp_col, conv_col, label, unit, fname in [
-        ("thi_breakpoint", "thi_converged", "THI breakpoint", "",
-         "retest_breakpoint_thi"),
-        ("temp_breakpoint", "temp_converged", "Barn-temp breakpoint", " °C",
-         "retest_breakpoint_temp"),
+    for predictor, label, unit, fname in [
+        ("thi", "THI breakpoint", "", "retest_breakpoint_thi"),
+        ("temp", "Barn-temp breakpoint", " °C", "retest_breakpoint_temp"),
     ]:
-        keep_col = conv_col.replace("_converged", "_bp_reliable")
-        keep_col = keep_col if keep_col in bs.columns else conv_col
-        d = bs[bs[keep_col] == True].dropna(subset=[bp_col])[
-            ["animal_id", "year", bp_col]].copy()
-        d["year"] = d["year"].astype(int)
-
-        rows = []
-        for aid, g in d.groupby("animal_id"):
-            m = dict(zip(g["year"], g[bp_col]))
-            for y in m:
-                if y + 1 in m:
-                    rows.append((aid, y, y + 1, m[y], m[y + 1]))
-        if len(rows) < 5:
+        if f"{predictor}_breakpoint" not in bs.columns:
             continue
-        pairs = pd.DataFrame(rows, columns=["animal_id", "from_year",
-                                            "to_year", "bp_last", "bp_this"])
+        pairs = build_consecutive_pairs(bs, predictor)
+        res = compute_retest_statistics(pairs)
+        if res is None:
+            continue
         x = pairs["bp_last"].to_numpy()
         y = pairs["bp_this"].to_numpy()
-        r, _ = stats.pearsonr(x, y)
-        slope, intercept, *_ = stats.linregress(x, y)
-        diff = y - x
-        loa = 1.96 * diff.std(ddof=1)
+        slope, intercept = res["slope"], res["intercept"]
 
         lo, hi = min(x.min(), y.min()), max(x.max(), y.max())
         pad = 0.04 * (hi - lo)
@@ -813,9 +803,13 @@ def plot_breakpoint_retest(bs: pd.DataFrame, out_dir: Path) -> None:
         ax.set_title(f"Year-to-year predictability of {label}",
                      fontsize=12, fontweight="bold")
         ax.text(0.03, 0.97,
-                f"r = {r:+.2f}  (r² = {r * r:.3f})\n"
-                f"slope = {slope:.2f}\n"
-                f"95% limits of agreement: ±{loa:.1f}{unit}",
+                f"n = {res['n_pairs']} pairs, {res['n_animals']} cows\n"
+                f"r = {res['pearson_r']:+.2f}  (95% CI "
+                f"{res['pearson_ci_lo']:.2f} to {res['pearson_ci_hi']:.2f}; "
+                f"r² = {res['r_squared']:.3f})\n"
+                f"slope = {slope:.2f}  (95% CI {res['slope_ci_lo']:.2f} "
+                f"to {res['slope_ci_hi']:.2f})\n"
+                f"95% limits of agreement: ±{res['loa']:.1f}{unit}",
                 transform=ax.transAxes, va="top", ha="left", fontsize=9,
                 bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
                           alpha=0.85, edgecolor="#ccc"))
